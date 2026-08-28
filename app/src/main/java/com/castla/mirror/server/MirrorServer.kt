@@ -7,6 +7,7 @@ import fi.iki.elonen.NanoWSD
 import fi.iki.elonen.NanoWSD.WebSocket
 import org.json.JSONObject
 import com.castla.mirror.diagnostics.DiagnosticEvent
+import com.castla.mirror.diagnostics.DiagnosticSanitizer
 import com.castla.mirror.diagnostics.MirrorDiagnostics
 import com.castla.mirror.utils.AppCategoryClassifier
 import com.castla.mirror.ott.OttCatalog
@@ -46,6 +47,8 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
 
     // Track active connection status
     private var isBrowserConnected = false
+    // One HTTP_FIRST_CONTACT per server instance (= per session; recreated each pipeline start)
+    private val httpFirstContact = FirstContactGate()
     private var onBrowserConnectionListener: ((Boolean) -> Unit)? = null
     private var onAudioSocketConnectedListener: (() -> Unit)? = null
 
@@ -143,6 +146,10 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
             if (!connected) {
                 MirrorDiagnostics.log(DiagnosticEvent.SOCKET_DISCONNECTED,
                     "all browser sockets closed")
+            } else {
+                // Every 0→1 transition, not just the first: the classifier uses
+                // this to treat earlier socket failures as recovered.
+                MirrorDiagnostics.log(DiagnosticEvent.WS_CONNECTED, "browser socket registered")
             }
             onBrowserConnectionListener?.invoke(connected)
         }
@@ -385,6 +392,7 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
     }
 
     override fun serveHttp(session: IHTTPSession): Response {
+        logHttpFirstContact(session)
         var uri = session.uri
         if (uri == "/") uri = "/index.html"
         
@@ -401,6 +409,15 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         return serveAsset(uri)
     }
     
+    private fun logHttpFirstContact(session: IHTTPSession) {
+        val src = session.remoteIpAddress
+        if (!httpFirstContact.tryAcquire(src)) return
+        MirrorDiagnostics.log(
+            DiagnosticEvent.HTTP_FIRST_CONTACT,
+            "src=${DiagnosticSanitizer.maskIp(src)} host=${DiagnosticSanitizer.sanitizeHost(session.headers["host"])}"
+        )
+    }
+
     private fun serveAppList(): Response {
         try {
             val pm = context.packageManager

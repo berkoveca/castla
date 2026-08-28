@@ -212,6 +212,37 @@ class DisconnectCauseClassifierTest {
         assertEquals(DisconnectCause.NETWORK, DisconnectCauseClassifier.classify(events))
     }
 
+    // ── WebSocket reconnect recovery ──
+
+    @Test
+    fun `ws reconnect recovers all prior socket failures`() {
+        val events = listOf(
+            DiagnosticEvent.WS_CONNECTED,
+            DiagnosticEvent.SOCKET_TIMEOUT,
+            DiagnosticEvent.SOCKET_DISCONNECTED,
+            DiagnosticEvent.WS_CONNECTED
+        )
+        assertEquals(DisconnectCause.UNKNOWN, DisconnectCauseClassifier.classify(events))
+    }
+
+    @Test
+    fun `unrecovered socket failure cascade classifies as NETWORK`() {
+        val events = listOf(
+            DiagnosticEvent.WS_CONNECTED,
+            DiagnosticEvent.SOCKET_TIMEOUT,
+            DiagnosticEvent.SOCKET_DISCONNECTED
+        )
+        assertEquals(DisconnectCause.NETWORK, DisconnectCauseClassifier.classify(events))
+    }
+
+    @Test
+    fun `ws connected alone is not a strong signal`() {
+        assertEquals(
+            DisconnectCause.UNKNOWN,
+            DisconnectCauseClassifier.classify(listOf(DiagnosticEvent.WS_CONNECTED))
+        )
+    }
+
     // ── Informational events are ignored ──
 
     @Test

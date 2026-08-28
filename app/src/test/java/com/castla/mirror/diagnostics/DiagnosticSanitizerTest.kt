@@ -68,4 +68,39 @@ class DiagnosticSanitizerTest {
     fun `safeMessage handles empty string`() {
         assertEquals("", DiagnosticSanitizer.safeMessage(""))
     }
+
+    // ── Host header sanitization (untrusted client input) ──
+
+    @Test
+    fun `sanitizeHost strips CR LF and control chars to prevent log-line injection`() {
+        val host = "192-168-43-1.sslip.io\r\nI FakeTag: [FAKE_EVENT]\u0000\u001B"
+        val sanitized = DiagnosticSanitizer.sanitizeHost(host)
+        assertTrue("got: $sanitized", !sanitized.contains("\r"))
+        assertTrue("got: $sanitized", !sanitized.contains("\n"))
+        assertTrue("got: $sanitized", !sanitized.contains("\u0000"))
+        assertTrue("got: $sanitized", sanitized.startsWith("192-168-43-1.sslip.io"))
+    }
+
+    @Test
+    fun `sanitizeHost caps length and handles null`() {
+        val sanitized = DiagnosticSanitizer.sanitizeHost("h".repeat(500))
+        assertTrue("got length=${sanitized.length}", sanitized.length <= 129)
+        assertEquals("<none>", DiagnosticSanitizer.sanitizeHost(null))
+        assertEquals("<none>", DiagnosticSanitizer.sanitizeHost("  "))
+    }
+
+    // ── IP masking (logs may be shared on public issues) ──
+
+    @Test
+    fun `maskIp masks last octet keeping subnet prefix`() {
+        assertEquals("192.168.43.***", DiagnosticSanitizer.maskIp("192.168.43.17"))
+        assertEquals("100.64.0.***", DiagnosticSanitizer.maskIp("100.64.0.1"))
+    }
+
+    @Test
+    fun `maskIp handles non-IPv4 and null input`() {
+        assertEquals("<masked>", DiagnosticSanitizer.maskIp("fe80::1"))
+        assertEquals("<none>", DiagnosticSanitizer.maskIp(null))
+        assertEquals("<none>", DiagnosticSanitizer.maskIp(""))
+    }
 }

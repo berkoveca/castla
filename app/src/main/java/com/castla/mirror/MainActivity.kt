@@ -640,45 +640,16 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
+    // Trusts NetworkMonitor's priority-selected IP. The old cellular-first
+    // override was a leftover of the abandoned Tesla virtual-IP experiment and
+    // advertised unreachable addresses (issue #51).
     private fun updateServerUrl() {
-        val cellularIp = getCellularIpv4Address()
-        val hotspotIp = currentIp
-
-        val ip = when {
-            cellularIp != null && !cellularIp.startsWith("10.") -> cellularIp
-            hotspotIp != "0.0.0.0" && hotspotIp.isNotEmpty() -> hotspotIp
-            else -> "0.0.0.0"
-        }
-
-        if (ip != "0.0.0.0") {
-            val sslipDomain = ip.replace('.', '-') + ".sslip.io"
-            serverUrl = "http://${sslipDomain}:${MirrorServer.DEFAULT_PORT}"
+        val ip = currentIp
+        serverUrl = if (ip != "0.0.0.0" && ip.isNotEmpty()) {
+            "http://${ip.replace('.', '-')}.sslip.io:${MirrorServer.DEFAULT_PORT}"
         } else {
-            serverUrl = "http://${ip}:${MirrorServer.DEFAULT_PORT}"
+            "http://${ip}:${MirrorServer.DEFAULT_PORT}"
         }
-    }
-
-    private fun getCellularIpv4Address(): String? {
-        try {
-            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
-            while (interfaces.hasMoreElements()) {
-                val iface = interfaces.nextElement()
-                if (iface.isLoopback || !iface.isUp) continue
-                val name = iface.name.lowercase()
-                if (name.contains("wlan") || name.contains("swlan") || name.contains("ap")) continue
-
-                val addrs = iface.inetAddresses
-                while (addrs.hasMoreElements()) {
-                    val addr = addrs.nextElement()
-                    if (!addr.isLoopbackAddress && addr.address.size == 4) {
-                        return addr.hostAddress
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to get cellular IP", e)
-        }
-        return null
     }
 
 
@@ -697,16 +668,28 @@ class MainActivity : AppCompatActivity() {
             // Give tethering time to initialize
             kotlinx.coroutines.delay(2000)
         }
+        // Hotspot interfaces don't reliably produce connectivity callbacks
+        networkMonitor.refresh()
         return success
     }
 
-    private fun disableHotspot() {
+    private suspend fun disableHotspot() {
         if (!shizukuSetup.serviceConnected.value) {
             Log.w(TAG, "disableHotspot: Shizuku service not connected")
             return
         }
         val success = shizukuSetup.stopWifiTethering()
         Log.i(TAG, "disableHotspot: stopWifiTethering returned $success")
+        if (success) {
+            // OEM teardown time varies and callbacks are unreliable — observe the
+            // interface actually disappearing instead of a fixed delay (max ~3s)
+            var waited = 0
+            while (findHotspotInterface() != null && waited < 3000) {
+                kotlinx.coroutines.delay(250)
+                waited += 250
+            }
+        }
+        networkMonitor.refresh()
     }
 
     private fun refreshHotspotStatus() {
@@ -1204,6 +1187,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun launchMirrorService(resultCode: Int, data: Intent) {
+        // Forced URL_SELECTED right before the session, with currentIp synced to the
+        // same scan: the log must show the IP the UI actually advertised, and a
+        // pre-run log-clear wipes the file but not the logger's dedupe state.
+        val netState = networkMonitor.refresh(forceLog = true)
+        currentIp = (netState as? NetworkState.Connected)?.ip ?: "0.0.0.0"
+        updateServerUrl()
         val intent = Intent(this, MirrorForegroundService::class.java).apply {
             putExtra(MirrorForegroundService.EXTRA_RESULT_CODE, resultCode)
             putExtra(MirrorForegroundService.EXTRA_DATA, data)
