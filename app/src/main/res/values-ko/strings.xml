@@ -25,6 +25,7 @@
     <string name="status_preparing">준비 중…</string>
     <string name="status_ready_to_stream">스트리밍 준비 완료</string>
     <string name="title_open_tesla_browser">테슬라 브라우저 열기</string>
+    <string name="label_alternate_urls">위 주소가 안 되면 아래 주소를 시도해 보세요</string>
     <string name="title_tesla_setup_required">테슬라 설정 필요</string>
     <string name="desc_shizuku_install_required">테슬라 브라우저에 연결하려면 Shizuku가 필요합니다.\n아래를 탭하여 Shizuku를 다운로드하고 설치하세요.</string>
     <string name="btn_how_to_install_shizuku">Shizuku 설치</string>

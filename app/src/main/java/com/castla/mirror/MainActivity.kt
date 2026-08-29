@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.castla.mirror.network.IpSelector
 import com.castla.mirror.network.NetworkMonitor
 import com.castla.mirror.network.NetworkState
 import com.castla.mirror.service.HotspotClientDetector
@@ -89,6 +90,7 @@ class MainActivity : AppCompatActivity() {
     private var isStreaming by mutableStateOf(false)
     private var isPreparing by mutableStateOf(false)
     private var serverUrl by mutableStateOf("")
+    private var alternateUrls by mutableStateOf<List<String>>(emptyList())
     private var currentIp by mutableStateOf("0.0.0.0")
     private var showSettings by mutableStateOf(false)
     private var streamSettings by mutableStateOf(StreamSettings())
@@ -337,6 +339,7 @@ class MainActivity : AppCompatActivity() {
                         isStreaming = isStreaming,
                         isPreparing = isPreparing,
                         serverUrl = serverUrl,
+                        alternateUrls = alternateUrls,
                         shizukuInstalled = shizukuInstalled,
                         shizukuRunning = shizukuRunning,
                         shizukuPermitted = shizukuPermitted,
@@ -640,18 +643,19 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    // Trusts NetworkMonitor's priority-selected IP. The old cellular-first
-    // override was a leftover of the abandoned Tesla virtual-IP experiment and
-    // advertised unreachable addresses (issue #51).
+    // Trusts NetworkMonitor's address (a learned one once a browser has reached
+    // us, the priority pick before that). Until a real connection settles it the
+    // pick is a guess, and on some devices a tethered client cannot reach the
+    // hotspot's own address even while connected to that hotspot (issue #51),
+    // so the remaining candidates are offered alongside it.
     private fun updateServerUrl() {
         val ip = currentIp
-        serverUrl = if (ip != "0.0.0.0" && ip.isNotEmpty()) {
-            "http://${ip.replace('.', '-')}.sslip.io:${MirrorServer.DEFAULT_PORT}"
-        } else {
-            "http://${ip}:${MirrorServer.DEFAULT_PORT}"
-        }
+        serverUrl = urlFor(ip)
+        alternateUrls = IpSelector.alternativesTo(ip, IpSelector.scan()).map { urlFor(it) }
     }
 
+    private fun urlFor(ip: String): String =
+        IpSelector.advertiseUrl(ip, MirrorServer.DEFAULT_PORT)
 
     /**
      * Enable WiFi tethering (hotspot) via Shizuku's privileged service.
@@ -1271,6 +1275,7 @@ fun CastlaScreen(
     isStreaming: Boolean,
     isPreparing: Boolean = false,
     serverUrl: String,
+    alternateUrls: List<String> = emptyList(),
     shizukuInstalled: Boolean,
     shizukuRunning: Boolean,
     shizukuPermitted: Boolean = false,
@@ -1442,6 +1447,26 @@ fun CastlaScreen(
                             textAlign = TextAlign.Center
                         )
 
+                        if (alternateUrls.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(20.dp))
+                            Text(
+                                text = stringResource(id = R.string.label_alternate_urls),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White.copy(alpha = 0.6f),
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            alternateUrls.forEach { url ->
+                                Text(
+                                    text = url,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White.copy(alpha = 0.85f),
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(vertical = 2.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }

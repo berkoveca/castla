@@ -25,6 +25,7 @@
     <string name="status_preparing">Voorbereiden…</string>
     <string name="status_ready_to_stream">Klaar om te streamen</string>
     <string name="title_open_tesla_browser">Open Tesla Browser</string>
+    <string name="label_alternate_urls">Werkt dat adres niet? Probeer deze</string>
     <string name="title_tesla_setup_required">Tesla Setup Vereist</string>
     <string name="desc_shizuku_install_required">Tesla browser heeft Shizuku nodig om te verbinden.\nTik hieronder om Shizuku te downloaden en te installeren.</string>
     <string name="btn_how_to_install_shizuku">Shizuku installeren</string>

@@ -62,7 +62,7 @@ class NetworkMonitor(private val context: Context) {
      */
     fun refresh(forceLog: Boolean = false): NetworkState {
         val candidates = IpSelector.scan()
-        val best = IpSelector.select(candidates)
+        val best = IpSelector.select(candidates, ReachableIp.last(context))
         UrlSelectionLogger.log(best, candidates, forceLog)
         val newState = if (best != null) {
             Log.i(TAG, "Selected IP ${best.ip} on ${best.iface} (priority=${best.priority})")

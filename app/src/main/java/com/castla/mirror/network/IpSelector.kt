@@ -31,7 +31,39 @@ object IpSelector {
         }
     }
 
-    fun select(candidates: List<IpCandidate>): IpCandidate? = candidates.maxByOrNull { it.priority }
+    /**
+     * [preferred] is an address a browser actually reached us on ([ReachableIp]);
+     * it wins whenever it is still live, because measurement beats the priority
+     * guess. Falls back to the highest priority before any successful contact.
+     */
+    fun select(candidates: List<IpCandidate>, preferred: String? = null): IpCandidate? =
+        candidates.firstOrNull { it.ip == preferred } ?: candidates.maxByOrNull { it.priority }
+
+    /**
+     * The other candidate IPs, highest priority first, deduped.
+     *
+     * No single priority is right on every device: a tethered client can sit on
+     * the hotspot yet be unable to reach the hotspot's own address, while another
+     * local address of the same phone works (issue #51). Callers offer the whole
+     * list rather than trusting one guess.
+     */
+    fun alternativesTo(selected: String, candidates: List<IpCandidate>): List<String> =
+        candidates.sortedByDescending { it.priority }
+            .map { it.ip }
+            .distinct()
+            .filter { it != selected }
+
+    /**
+     * Advertised URL for [ip] — always the raw IP, never a hostname.
+     *
+     * Hostname forms (the old sslip.io wrapping) are unreachable on IPv6-only
+     * carriers: with 464XLAT/NAT64 the network's DNS64 synthesizes the A record
+     * into a 64:ff9b::/96 address, which routes to the carrier's NAT64 gateway
+     * instead of this phone, so the browser never reaches the server. Measured
+     * on issue #51 — 192-0-0-8.sslip.io resolved to 64:ff9b::c000:8 and timed
+     * out while http://192.0.0.8 worked from the same client.
+     */
+    fun advertiseUrl(ip: String, port: Int): String = "http://$ip:$port"
 
     /** Enumerates live interfaces into candidates. Never yields 0.0.0.0 or loopback. */
     fun scan(): List<IpCandidate> {

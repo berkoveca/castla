@@ -9,8 +9,9 @@ import org.json.JSONObject
 import com.castla.mirror.diagnostics.DiagnosticEvent
 import com.castla.mirror.diagnostics.DiagnosticSanitizer
 import com.castla.mirror.diagnostics.MirrorDiagnostics
-import com.castla.mirror.utils.AppCategoryClassifier
+import com.castla.mirror.network.ReachableIp
 import com.castla.mirror.ott.OttCatalog
+import com.castla.mirror.utils.AppCategoryClassifier
 
 data class TouchEvent(val action: String, val x: Float, val y: Float, val pointerId: Int, val pane: String = "primary")
 
@@ -412,6 +413,9 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
     private fun logHttpFirstContact(session: IHTTPSession) {
         val src = session.remoteIpAddress
         if (!httpFirstContact.tryAcquire(src)) return
+        // This request proves which of our addresses the browser can reach —
+        // the one thing the priority table can only guess at (issue #51).
+        ReachableIp.remember(context, session.headers["host"])
         MirrorDiagnostics.log(
             DiagnosticEvent.HTTP_FIRST_CONTACT,
             "src=${DiagnosticSanitizer.maskIp(src)} host=${DiagnosticSanitizer.sanitizeHost(session.headers["host"])}"
