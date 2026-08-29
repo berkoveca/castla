@@ -1159,14 +1159,35 @@ class MirrorForegroundService : Service() {
 
                 server.start(0)
                 Log.i(TAG, "Server started on port ${MirrorServer.DEFAULT_PORT} — waiting for browser")
+                serviceScope.launch(Dispatchers.IO) {
+                    MirrorDiagnostics.log(DiagnosticEvent.SERVER_READY,
+                        "port=${MirrorServer.DEFAULT_PORT} localProbe=${localHttpProbe()}")
+                }
             }
 
             Log.i(TAG, "Pipeline initialized (idle): ${width}x${height}, audio=$audioEnabled")
             MirrorWidgetProvider.updateAllWidgets(this)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start pipeline", e)
+            FileLogger.e(TAG, "Failed to start pipeline: ${e.javaClass.simpleName}: ${e.message}")
             stopSelf()
         }
+    }
+
+    /**
+     * Loopback-only probe with fixed timeouts. Proves nothing about remote
+     * reachability, but separates server-layer failures from network-layer ones.
+     */
+    private fun localHttpProbe(): String = try {
+        val conn = java.net.URL("http://127.0.0.1:${MirrorServer.DEFAULT_PORT}/")
+            .openConnection() as java.net.HttpURLConnection
+        conn.connectTimeout = 2000
+        conn.readTimeout = 2000
+        val code = conn.responseCode
+        conn.disconnect()
+        "ok($code)"
+    } catch (e: Exception) {
+        "fail(${e.javaClass.simpleName})"
     }
     
     // ActiveLaunchSession tracks what's currently running on the virtual display

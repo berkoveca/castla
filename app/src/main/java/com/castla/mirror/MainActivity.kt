@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.castla.mirror.network.IpSelector
 import com.castla.mirror.network.NetworkMonitor
 import com.castla.mirror.network.NetworkState
 import com.castla.mirror.service.HotspotClientDetector
@@ -89,6 +90,7 @@ class MainActivity : AppCompatActivity() {
     private var isStreaming by mutableStateOf(false)
     private var isPreparing by mutableStateOf(false)
     private var serverUrl by mutableStateOf("")
+    private var alternateUrls by mutableStateOf<List<String>>(emptyList())
     private var currentIp by mutableStateOf("0.0.0.0")
     private var showSettings by mutableStateOf(false)
     private var streamSettings by mutableStateOf(StreamSettings())
@@ -337,6 +339,7 @@ class MainActivity : AppCompatActivity() {
                         isStreaming = isStreaming,
                         isPreparing = isPreparing,
                         serverUrl = serverUrl,
+                        alternateUrls = alternateUrls,
                         shizukuInstalled = shizukuInstalled,
                         shizukuRunning = shizukuRunning,
                         shizukuPermitted = shizukuPermitted,
@@ -640,47 +643,19 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
+    // Trusts NetworkMonitor's address (a learned one once a browser has reached
+    // us, the priority pick before that). Until a real connection settles it the
+    // pick is a guess, and on some devices a tethered client cannot reach the
+    // hotspot's own address even while connected to that hotspot (issue #51),
+    // so the remaining candidates are offered alongside it.
     private fun updateServerUrl() {
-        val cellularIp = getCellularIpv4Address()
-        val hotspotIp = currentIp
-
-        val ip = when {
-            cellularIp != null && !cellularIp.startsWith("10.") -> cellularIp
-            hotspotIp != "0.0.0.0" && hotspotIp.isNotEmpty() -> hotspotIp
-            else -> "0.0.0.0"
-        }
-
-        if (ip != "0.0.0.0") {
-            val sslipDomain = ip.replace('.', '-') + ".sslip.io"
-            serverUrl = "http://${sslipDomain}:${MirrorServer.DEFAULT_PORT}"
-        } else {
-            serverUrl = "http://${ip}:${MirrorServer.DEFAULT_PORT}"
-        }
+        val ip = currentIp
+        serverUrl = urlFor(ip)
+        alternateUrls = IpSelector.alternativesTo(ip, IpSelector.scan()).map { urlFor(it) }
     }
 
-    private fun getCellularIpv4Address(): String? {
-        try {
-            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
-            while (interfaces.hasMoreElements()) {
-                val iface = interfaces.nextElement()
-                if (iface.isLoopback || !iface.isUp) continue
-                val name = iface.name.lowercase()
-                if (name.contains("wlan") || name.contains("swlan") || name.contains("ap")) continue
-
-                val addrs = iface.inetAddresses
-                while (addrs.hasMoreElements()) {
-                    val addr = addrs.nextElement()
-                    if (!addr.isLoopbackAddress && addr.address.size == 4) {
-                        return addr.hostAddress
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to get cellular IP", e)
-        }
-        return null
-    }
-
+    private fun urlFor(ip: String): String =
+        IpSelector.advertiseUrl(ip, MirrorServer.DEFAULT_PORT)
 
     /**
      * Enable WiFi tethering (hotspot) via Shizuku's privileged service.
@@ -697,16 +672,28 @@ class MainActivity : AppCompatActivity() {
             // Give tethering time to initialize
             kotlinx.coroutines.delay(2000)
         }
+        // Hotspot interfaces don't reliably produce connectivity callbacks
+        networkMonitor.refresh()
         return success
     }
 
-    private fun disableHotspot() {
+    private suspend fun disableHotspot() {
         if (!shizukuSetup.serviceConnected.value) {
             Log.w(TAG, "disableHotspot: Shizuku service not connected")
             return
         }
         val success = shizukuSetup.stopWifiTethering()
         Log.i(TAG, "disableHotspot: stopWifiTethering returned $success")
+        if (success) {
+            // OEM teardown time varies and callbacks are unreliable — observe the
+            // interface actually disappearing instead of a fixed delay (max ~3s)
+            var waited = 0
+            while (findHotspotInterface() != null && waited < 3000) {
+                kotlinx.coroutines.delay(250)
+                waited += 250
+            }
+        }
+        networkMonitor.refresh()
     }
 
     private fun refreshHotspotStatus() {
@@ -1204,6 +1191,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun launchMirrorService(resultCode: Int, data: Intent) {
+        // Forced URL_SELECTED right before the session, with currentIp synced to the
+        // same scan: the log must show the IP the UI actually advertised, and a
+        // pre-run log-clear wipes the file but not the logger's dedupe state.
+        val netState = networkMonitor.refresh(forceLog = true)
+        currentIp = (netState as? NetworkState.Connected)?.ip ?: "0.0.0.0"
+        updateServerUrl()
         val intent = Intent(this, MirrorForegroundService::class.java).apply {
             putExtra(MirrorForegroundService.EXTRA_RESULT_CODE, resultCode)
             putExtra(MirrorForegroundService.EXTRA_DATA, data)
@@ -1282,6 +1275,7 @@ fun CastlaScreen(
     isStreaming: Boolean,
     isPreparing: Boolean = false,
     serverUrl: String,
+    alternateUrls: List<String> = emptyList(),
     shizukuInstalled: Boolean,
     shizukuRunning: Boolean,
     shizukuPermitted: Boolean = false,
@@ -1453,6 +1447,26 @@ fun CastlaScreen(
                             textAlign = TextAlign.Center
                         )
 
+                        if (alternateUrls.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(20.dp))
+                            Text(
+                                text = stringResource(id = R.string.label_alternate_urls),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White.copy(alpha = 0.6f),
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            alternateUrls.forEach { url ->
+                                Text(
+                                    text = url,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White.copy(alpha = 0.85f),
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(vertical = 2.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }

@@ -25,6 +25,7 @@
     <string name="status_preparing">Forbereder…</string>
     <string name="status_ready_to_stream">Klar til å strømme</string>
     <string name="title_open_tesla_browser">Åpne Tesla-nettleseren</string>
+    <string name="label_alternate_urls">Hvis den adressen ikke virker, prøv disse</string>
     <string name="title_tesla_setup_required">Tesla-oppsett kreves</string>
     <string name="desc_shizuku_install_required">Tesla-nettleseren trenger Shizuku for å koble til.\nTrykk nedenfor for å laste ned og installere Shizuku.</string>
     <string name="btn_how_to_install_shizuku">Installer Shizuku</string>

@@ -20,7 +20,15 @@ enum class DiagnosticEvent {
     VD_STOPPED,
     SOCKET_DISCONNECTED,
     SOCKET_TIMEOUT,
-    SESSION_END
+    SESSION_END,
+    /** Advertised IP chosen, with full candidate snapshot (iface/maskedIp/priority). */
+    URL_SELECTED,
+    /** HTTP server started; detail carries the loopback self-probe result. */
+    SERVER_READY,
+    /** First non-loopback HTTP request of the session (masked source IP + sanitized Host). */
+    HTTP_FIRST_CONTACT,
+    /** Browser socket count transitioned 0→1 (first contact or reconnect). */
+    WS_CONNECTED
 }
 
 /**
@@ -62,7 +70,7 @@ enum class TerminalReason {
  *
  *  1. Unrecovered `SHIZUKU_BINDER_DEAD`              → SHIZUKU
  *  2. Unrecovered `VD_STOPPED`                        → VIRTUAL_DISPLAY
- *  3. `SOCKET_DISCONNECTED` or `SOCKET_TIMEOUT`       → NETWORK
+ *  3. `SOCKET_DISCONNECTED` or `SOCKET_TIMEOUT` not followed by `WS_CONNECTED` → NETWORK
  *  4. `SCREEN_OFF` present (with no strong signal)     → PROCESS_OR_POWER
  *  5. fallback                                         → UNKNOWN
  *
@@ -76,12 +84,16 @@ object DisconnectCauseClassifier {
         // Each recovery "absorbs" one preceding failure of the same kind.
         var shizukuRecoveries = 0
         var vdRecoveries = 0
+        // A reconnect recovers ALL earlier socket failures, not just one: a single
+        // outage can emit SOCKET_TIMEOUT then SOCKET_DISCONNECTED back to back.
+        var wsRecovered = false
 
         for (event in recentEvents.asReversed()) {
             when (event) {
                 // Recovery events: accumulate a credit that cancels one failure
                 DiagnosticEvent.SHIZUKU_BINDER_READY -> shizukuRecoveries++
                 DiagnosticEvent.VD_CREATED -> vdRecoveries++
+                DiagnosticEvent.WS_CONNECTED -> wsRecovered = true
 
                 // Failure events: only count if not cancelled by a later recovery
                 DiagnosticEvent.SHIZUKU_BINDER_DEAD -> {
@@ -99,7 +111,9 @@ object DisconnectCauseClassifier {
                     }
                 }
                 DiagnosticEvent.SOCKET_DISCONNECTED,
-                DiagnosticEvent.SOCKET_TIMEOUT -> return DisconnectCause.NETWORK
+                DiagnosticEvent.SOCKET_TIMEOUT -> {
+                    if (!wsRecovered) return DisconnectCause.NETWORK
+                }
 
                 else -> { /* continue scanning */ }
             }

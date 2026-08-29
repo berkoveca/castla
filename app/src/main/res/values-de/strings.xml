@@ -25,6 +25,7 @@
     <string name="status_preparing">Vorbereitung…</string>
     <string name="status_ready_to_stream">Bereit zum Streamen</string>
     <string name="title_open_tesla_browser">Tesla Browser öffnen</string>
+    <string name="label_alternate_urls">Falls diese Adresse nicht funktioniert, probieren Sie diese</string>
     <string name="title_tesla_setup_required">Tesla Einrichtung erforderlich</string>
     <string name="desc_shizuku_install_required">Der Tesla-Browser benötigt Shizuku zur Verbindung.\nTippen Sie unten, um Shizuku herunterzuladen und zu installieren.</string>
     <string name="btn_how_to_install_shizuku">Shizuku installieren</string>
