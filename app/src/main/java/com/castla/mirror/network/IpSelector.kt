@@ -26,6 +26,13 @@ object IpSelector {
             name.startsWith("wlan") && ip.startsWith("192.168.") -> 10
             name.startsWith("wlan") && ip.startsWith("10.") -> 5
             name.startsWith("eth") -> 3
+            // CLAT/464XLAT dummy address (RFC 7600, 192.0.0.0/24 special-use). On IPv6-only
+            // carriers the phone already holds a 192.0.0.x locally; a car on the hotspot can
+            // reach it via weak-host delivery (issue #51). Lift it above generic cellular so it
+            // is visible in the candidate list, but keep it BELOW every WiFi/hotspot tier so a
+            // working private-IP setup's first-try URL is never regressed. ReachableIp promotes
+            // whatever actually gets first contact, so this only nudges the initial guess.
+            ip.startsWith("192.0.0.") -> 4
             // Everything else (likely mobile data) — low priority
             else -> 1
         }

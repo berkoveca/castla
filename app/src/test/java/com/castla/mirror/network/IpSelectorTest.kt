@@ -3,6 +3,7 @@ package com.castla.mirror.network
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class IpSelectorTest {
@@ -31,6 +32,37 @@ class IpSelectorTest {
         assertEquals(5, IpSelector.priorityOf("wlan0", "10.0.5.3"))
         assertEquals(3, IpSelector.priorityOf("eth0", "192.0.2.9"))
         assertEquals(1, IpSelector.priorityOf("rmnet_data0", "100.80.1.2"))
+    }
+
+    // ── CLAT/464XLAT dummy address (192.0.0.x): visible above cellular, never beats WiFi (issue #51) ──
+
+    @Test
+    fun `CLAT dummy address ranks above cellular but below every WiFi and hotspot tier`() {
+        val clat = IpSelector.priorityOf("rmnet_data9", "192.0.0.8")
+        assertEquals(4, clat)
+        assertTrue(clat > IpSelector.priorityOf("rmnet_data0", "100.80.1.2")) // above cellular
+        assertTrue(clat < IpSelector.priorityOf("wlan0", "10.0.5.3"))         // below wlan (10.x)
+        assertTrue(clat < IpSelector.priorityOf("wlan0", "192.168.1.7"))      // below wlan (192.168)
+        assertTrue(clat < IpSelector.priorityOf("swlan0", "10.69.97.36"))     // below hotspot iface
+    }
+
+    @Test
+    fun `CLAT address does not change the first-try pick when WiFi is present`() {
+        val selected = IpSelector.select(listOf(
+            candidate("rmnet_data9", "192.0.0.8"),
+            candidate("wlan0", "192.168.1.7")
+        ))
+        assertEquals("192.168.1.7", selected?.ip) // WiFi still wins the first try — no regression
+    }
+
+    @Test
+    fun `CLAT address is surfaced above cellular in the alternatives list`() {
+        val alts = IpSelector.alternativesTo("192.168.1.7", listOf(
+            candidate("wlan0", "192.168.1.7"),
+            candidate("rmnet_data0", "100.80.1.2"), // generic cellular
+            candidate("rmnet_data9", "192.0.0.8")   // CLAT dummy
+        ))
+        assertEquals(listOf("192.0.0.8", "100.80.1.2"), alts)
     }
 
     // ── Learned preference beats the priority guess (issue #51) ──
