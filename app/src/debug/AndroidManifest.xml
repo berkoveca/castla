@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DEBUG-ONLY manifest overlay for the issue #51 Phase 0.5a packet-reachability
+  spike. Merged only into the debug variant; the release manifest never declares
+  a VpnService (avoids security-product false positives on the shipped APK).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+
+        <!-- Smallest consent entry point; launchable via `adb shell am start`. -->
+        <activity
+            android:name=".spike.SpikeVpnActivity"
+            android:exported="true" />
+
+        <service
+            android:name=".spike.SpikeVpnService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+
+        <!-- Phase 1: weak-host synthesis experiment (issue #51). Debug-only.
+             Own launcher icon so testers without adb can toggle it by tapping. -->
+        <activity
+            android:name=".spike.WeakHostActivity"
+            android:label="Castla WeakHost"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".spike.WeakHostVpnService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+
+    </application>
+
+</manifest>
