@@ -34,6 +34,7 @@ import android.widget.Toast
 import androidx.core.content.FileProvider
 import com.castla.mirror.BuildConfig
 import com.castla.mirror.R
+import com.castla.mirror.debughook.WeakHostToggle
 import com.castla.mirror.diagnostics.FileLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -491,6 +492,9 @@ fun SettingsScreen(
                     }
                 }
             }
+
+            // issue #51: debug-only weak-host synthesis toggle (no-op in release builds)
+            WeakHostToggle()
 
             Spacer(modifier = Modifier.height(40.dp))
 
