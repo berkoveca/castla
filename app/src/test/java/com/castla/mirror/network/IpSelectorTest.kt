@@ -131,6 +131,25 @@ class IpSelectorTest {
     }
 
     @Test
+    fun `alternatives collapse once the selected IP is the confirmed-reachable one`() {
+        val alts = IpSelector.alternativesTo("192.0.0.8", listOf(
+            candidate("rmnet_data9", "192.0.0.8"),
+            candidate("swlan0", "10.69.97.36"),
+            candidate("wlan0", "192.168.1.7")
+        ), confirmed = "192.0.0.8")
+        assertEquals(emptyList<String>(), alts)
+    }
+
+    @Test
+    fun `stale confirmation for a different IP keeps the alternatives`() {
+        val alts = IpSelector.alternativesTo("10.69.97.36", listOf(
+            candidate("rmnet_data9", "192.0.0.8"),
+            candidate("swlan0", "10.69.97.36")
+        ), confirmed = "192.168.1.99")
+        assertEquals(listOf("192.0.0.8"), alts)
+    }
+
+    @Test
     fun `alternatives are empty when the selected IP is the only candidate`() {
         val alts = IpSelector.alternativesTo("10.69.97.36", listOf(
             candidate("swlan0", "10.69.97.36")

@@ -52,10 +52,17 @@ object IpSelector {
      * No single priority is right on every device: a tethered client can sit on
      * the hotspot yet be unable to reach the hotspot's own address, while another
      * local address of the same phone works (issue #51). Callers offer the whole
-     * list rather than trusting one guess.
+     * list rather than trusting one guess — until a browser has actually reached
+     * [selected] ([confirmed], from [ReachableIp]): a measured-working URL needs
+     * no alternatives, and hiding them stops users from retrying dead ones.
      */
-    fun alternativesTo(selected: String, candidates: List<IpCandidate>): List<String> =
-        candidates.sortedByDescending { it.priority }
+    fun alternativesTo(
+        selected: String,
+        candidates: List<IpCandidate>,
+        confirmed: String? = null
+    ): List<String> =
+        if (selected == confirmed) emptyList()
+        else candidates.sortedByDescending { it.priority }
             .map { it.ip }
             .distinct()
             .filter { it != selected }

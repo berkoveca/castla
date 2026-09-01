@@ -58,6 +58,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.castla.mirror.network.IpSelector
 import com.castla.mirror.network.NetworkMonitor
 import com.castla.mirror.network.NetworkState
+import com.castla.mirror.network.ReachableIp
 import com.castla.mirror.service.HotspotClientDetector
 import com.castla.mirror.service.MirrorForegroundService
 import com.castla.mirror.service.TeslaBleScanner
@@ -647,11 +648,13 @@ class MainActivity : AppCompatActivity() {
     // us, the priority pick before that). Until a real connection settles it the
     // pick is a guess, and on some devices a tethered client cannot reach the
     // hotspot's own address even while connected to that hotspot (issue #51),
-    // so the remaining candidates are offered alongside it.
+    // so the remaining candidates are offered alongside it. Once the pick IS the
+    // measured-reachable address, only that URL is shown.
     private fun updateServerUrl() {
         val ip = currentIp
         serverUrl = urlFor(ip)
-        alternateUrls = IpSelector.alternativesTo(ip, IpSelector.scan()).map { urlFor(it) }
+        alternateUrls = IpSelector.alternativesTo(ip, IpSelector.scan(), ReachableIp.last(this))
+            .map { urlFor(it) }
     }
 
     private fun urlFor(ip: String): String =
