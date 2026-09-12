@@ -48,6 +48,7 @@ fun gitCommitCount(): Int = try {
 android {
     namespace = "com.castla.mirror"
     compileSdk = 35
+    buildToolsVersion = "35.0.0"
 
     if (keystorePropertiesFile.exists()) {
         signingConfigs {

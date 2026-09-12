@@ -1,4 +1,5 @@
 const host = window.location.host;
+const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
 
 let videoSocket = null;
 let controlSocket = null;
@@ -397,7 +398,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (secondaryVideoSocket) {
             try { secondaryVideoSocket.close(); } catch (_) {}
         }
-        const wsUrl = `ws://${host}/ws/video?channel=secondary`;
+        const wsUrl = `${wsProtocol}://${host}/ws/video?channel=secondary`;
         secondaryVideoSocket = new WebSocket(wsUrl);
         secondaryVideoSocket.binaryType = 'arraybuffer';
         secondaryVideoSocket.onmessage = async (event) => {
@@ -887,7 +888,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function connectVideo() {
-        const wsUrl = `ws://${host}/ws/video`;
+        const wsUrl = `${wsProtocol}://${host}/ws/video`;
         if (!isLauncherMode) setStatus('Connecting...', '');
 
         clearFrameWatchdog();
@@ -990,7 +991,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (SPLIT_STRATEGY === 'dual_stream' && browserSplitState.active && (!secondaryVideoSocket || secondaryVideoSocket.readyState === WebSocket.CLOSED)) connectSecondaryVideo();
             if (controlSocket && controlSocket.readyState === WebSocket.CLOSED) connectControl();
             if (audioPlayer && (!audioPlayer.socket || audioPlayer.socket.readyState === WebSocket.CLOSED)) {
-                audioPlayer.startFromUserGesture(`ws://${host}/ws/audio`);
+                audioPlayer.startFromUserGesture(`${wsProtocol}://${host}/ws/audio`);
             }
         }, 3000);
     }
@@ -1060,7 +1061,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function connectControl() {
-        const wsUrl = `ws://${host}/ws/control`;
+        const wsUrl = `${wsProtocol}://${host}/ws/control`;
         controlSocket = new WebSocket(wsUrl);
 
         controlSocket.onopen = () => {
@@ -1640,7 +1641,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const dismissSplash = async () => {
         if (!splashReady) return; // ignore taps before loading finishes
         if (!audioPlayer.socket || audioPlayer.socket.readyState === WebSocket.CLOSED) {
-            await audioPlayer.startFromUserGesture(`ws://${host}/ws/audio`);
+            await audioPlayer.startFromUserGesture(`${wsProtocol}://${host}/ws/audio`);
         }
         document.removeEventListener('click', dismissSplash);
         document.removeEventListener('touchstart', dismissSplash);
