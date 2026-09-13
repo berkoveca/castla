@@ -933,13 +933,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (firstFrameReceived) {
             clearLaunchTimeout();
             const mseVideo = document.getElementById('mse-video');
-            if (codecMode === 'mjpeg') {
-                canvas.style.opacity = '1';
-                if (mseVideo) mseVideo.style.opacity = '0';
-            } else {
-                if (mseVideo) mseVideo.style.opacity = '1';
-                canvas.style.opacity = '0';
-            }
+            canvas.style.opacity = '1';
+            if (mseVideo) mseVideo.style.opacity = '0';
             hideOverlay();
             if (decoder && decoder.play) {
                 decoder.play();
@@ -1123,7 +1118,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             _seedMetrics();
             qualityReportInterval = setInterval(() => {
                 if (!controlSocket || controlSocket.readyState !== WebSocket.OPEN) return;
-                const report = { type: 'qualityReport' };
+                const report = { type: 'qualityReport', codec: codecMode };
                 // Prefer FramePacer metrics (WebCodecs path), fall back to decoder metrics (MJPEG)
                 const src = framePacer || (decoder && decoder.getMetrics ? decoder : null);
                 if (src) {
@@ -1138,6 +1133,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     report.avgDelayMs = intervalRendered > 0
                         ? parseFloat((intervalLatency / intervalRendered).toFixed(1))
                         : 0;
+                    report.rendered = intervalRendered;
                 }
                 if (decoder && decoder.getBacklogMetrics) {
                     const d = decoder.getBacklogMetrics();

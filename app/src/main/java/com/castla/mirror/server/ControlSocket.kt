@@ -1,6 +1,7 @@
 package com.castla.mirror.server
 
 import android.util.Log
+import com.castla.mirror.diagnostics.FileLogger
 import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoWSD
 import org.json.JSONObject
@@ -112,11 +113,16 @@ class ControlSocket(
                     }
                 }
                 "qualityReport" -> {
-                    server.onQualityReport(
-                        droppedFrames = json.optInt("droppedFrames", 0),
-                        avgDelayMs = json.optDouble("avgDelayMs", 0.0),
-                        backlogDrops = json.optInt("backlogDrops", 0)
+                    val droppedFrames = json.optInt("droppedFrames", 0)
+                    val avgDelayMs = json.optDouble("avgDelayMs", 0.0)
+                    val backlogDrops = json.optInt("backlogDrops", 0)
+                    FileLogger.i(
+                        "client",
+                        "quality codec=${json.optString("codec", "-")} avg=${avgDelayMs}ms " +
+                            "dropped=$droppedFrames backlog=$backlogDrops " +
+                            "rendered=${json.optInt("rendered", -1)}"
                     )
+                    server.onQualityReport(droppedFrames, avgDelayMs, backlogDrops)
                 }
                 "bubbleClosed" -> {
                     server.onBubbleClosed()
