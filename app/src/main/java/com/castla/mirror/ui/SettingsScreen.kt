@@ -363,6 +363,7 @@ fun SettingsScreen(
                             Switch(
                                 checked = tunnelCfg.authEnabled,
                                 onCheckedChange = { enabled -> update { it.copy(authEnabled = enabled) } },
+                                enabled = !isStreaming,
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = Color.White,
                                     checkedTrackColor = Color(0xFF2979FF),
@@ -387,6 +388,42 @@ fun SettingsScreen(
                                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color.White),
                                 colors = authFieldColors(),
                                 modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        // Named tunnel toggle: replaces the temporary quick tunnel
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.settings_named_enabled),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = stringResource(R.string.settings_named_enabled_description),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White.copy(alpha = 0.6f)
+                                )
+                            }
+                            Switch(
+                                checked = tunnelCfg.namedTunnelEnabled && tunnelCfg.namedTunnelToken.isNotBlank(),
+                                onCheckedChange = { enabled -> update { it.copy(namedTunnelEnabled = enabled) } },
+                                enabled = !isStreaming && tunnelCfg.namedTunnelToken.isNotBlank(),
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = Color(0xFF2979FF),
+                                    uncheckedThumbColor = Color.White.copy(alpha = 0.7f),
+                                    uncheckedTrackColor = Color.White.copy(alpha = 0.2f),
+                                    uncheckedBorderColor = Color.Transparent
+                                )
                             )
                         }
 

@@ -21,6 +21,7 @@ private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 data class TunnelSecurityConfig(
     val authEnabled: Boolean = false,
     val authPassword: String = "",
+    val namedTunnelEnabled: Boolean = false,
     val namedTunnelToken: String = "",
     val namedTunnelUrl: String = ""
 ) {
@@ -30,6 +31,7 @@ data class TunnelSecurityConfig(
         private const val KEY_AUTH_ENABLED = "auth_enabled"
         private const val KEY_AUTH_PASSWORD = "auth_password"
         private const val KEY_AUTH_SECRET = "auth_secret"
+        private const val KEY_NAMED_ENABLED = "named_enabled"
         private const val KEY_NAMED_TOKEN = "named_token"
         private const val KEY_NAMED_URL = "named_url"
 
@@ -40,6 +42,7 @@ data class TunnelSecurityConfig(
             return TunnelSecurityConfig(
                 authEnabled = prefs.getBoolean(KEY_AUTH_ENABLED, false),
                 authPassword = prefs.getString(KEY_AUTH_PASSWORD, "") ?: "",
+                namedTunnelEnabled = prefs.getBoolean(KEY_NAMED_ENABLED, false),
                 namedTunnelToken = prefs.getString(KEY_NAMED_TOKEN, "") ?: "",
                 namedTunnelUrl = prefs.getString(KEY_NAMED_URL, "") ?: ""
             )
@@ -49,6 +52,7 @@ data class TunnelSecurityConfig(
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
                 .putBoolean(KEY_AUTH_ENABLED, config.authEnabled)
                 .putString(KEY_AUTH_PASSWORD, config.authPassword)
+                .putBoolean(KEY_NAMED_ENABLED, config.namedTunnelEnabled)
                 .putString(KEY_NAMED_TOKEN, config.namedTunnelToken)
                 .putString(KEY_NAMED_URL, config.namedTunnelUrl)
                 .apply()
@@ -96,7 +100,12 @@ data class TunnelSecurityConfig(
         fun sha256Hex(input: String): String =
             MessageDigest.getInstance("SHA-256").digest(input.toByteArray()).toHex()
 
+        /** True when a connector token has been saved (regardless of the toggle). */
         fun hasNamedTunnel(config: TunnelSecurityConfig): Boolean =
             config.namedTunnelToken.isNotBlank()
+
+        /** True when the user chose the permanent tunnel: toggle on AND a token present. */
+        fun shouldUseNamedTunnel(config: TunnelSecurityConfig): Boolean =
+            config.namedTunnelEnabled && hasNamedTunnel(config)
     }
 }

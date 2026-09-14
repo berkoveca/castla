@@ -88,7 +88,7 @@ class CloudflareTunnelManager(private val context: Context) {
                     Log.i(TAG, "Downloading cloudflared binary...")
                     downloadBinary()
                 }
-                if (TunnelSecurityConfig.hasNamedTunnel(config)) {
+                if (TunnelSecurityConfig.shouldUseNamedTunnel(config)) {
                     startNamedTunnelProcess(config.namedTunnelToken)
                 } else {
                     startQuickTunnelProcess(localPort)

@@ -103,7 +103,9 @@
     <string name="settings_auth_password">Password</string>
     <string name="settings_auth_password_hint">Leave empty to disable</string>
     <string name="settings_named_tunnel_label">Permanent Cloudflare URL (optional)</string>
-    <string name="settings_named_tunnel_description">Paste a Cloudflare Zero Trust connector token to use a permanent hostname instead of a random trycloudflare.com address. Changes apply on the next mirroring start.</string>
+    <string name="settings_named_enabled">Use permanent tunnel</string>
+    <string name="settings_named_enabled_description">When on, the app runs only your permanent Cloudflare tunnel instead of the temporary trycloudflare.com one. Requires a connector token.</string>
+    <string name="settings_named_tunnel_description">Paste a Cloudflare Zero Trust connector token, then toggle the permanent tunnel on. The temporary quick tunnel is not started in this mode.</string>
     <string name="settings_named_token">Connector token</string>
     <string name="settings_named_url">Your public hostname (https://…)</string>
     <string name="home_tunnel_password_protected">· password protected</string>
