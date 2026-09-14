@@ -113,13 +113,21 @@ class CloudflareTunnelManager(private val context: Context) {
             binary.absolutePath,
             "tunnel",
             "--url", "http://127.0.0.1:$localPort",
-            "--protocol", "http2"
+            "--protocol", "http2",
+            "--no-autoupdate"
         )
         Log.i(TAG, "Starting: ${cmd.joinToString(" ")}")
 
         val pb = ProcessBuilder(cmd)
             .directory(context.filesDir)
             .redirectErrorStream(true)
+        // cloudflared is a static Go binary — on Android its default CA lookup
+        // paths (/etc/ssl/certs/...) don't exist, so TLS verification against
+        // api.trycloudflare.com fails with "certificate signed by unknown
+        // authority". Point it at Android's system CA store (world-readable
+        // hashed dir present since Android 7, minSdk 26).
+        pb.environment()["SSL_CERT_DIR"] = "/system/etc/security/cacerts"
+        pb.environment()["SSL_CERT_FILE"] = "/system/etc/security/cacerts/cacert.pem"
 
         val proc = pb.start()
         process = proc
