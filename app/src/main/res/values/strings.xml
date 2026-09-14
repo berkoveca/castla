@@ -65,21 +65,6 @@
     <string name="settings_res_1080">1080p (High)</string>
     <string name="settings_fps_auto">Auto</string>
 
-    <!-- Auto Hotspot -->
-    <string name="settings_auto_hotspot">Auto Hotspot</string>
-    <string name="settings_auto_hotspot_title">Auto-toggle hotspot</string>
-    <string name="settings_auto_hotspot_description">Automatically turn on hotspot when mirroring starts, and turn it off when mirroring stops. Requires Shizuku.</string>
-    <string name="toast_hotspot_enabling">Enabling hotspot...</string>
-    <string name="toast_hotspot_enabled">Hotspot enabled</string>
-    <string name="toast_hotspot_failed">Failed to enable hotspot. Check Shizuku is running.</string>
-    <string name="toast_hotspot_disabled">Hotspot disabled</string>
-    <string name="dialog_hotspot_off_title">Turn off hotspot?</string>
-    <string name="dialog_hotspot_off_message">Hotspot was turned on for mirroring. Would you like to turn it off?</string>
-    <string name="dialog_hotspot_off_yes">Turn off</string>
-    <string name="dialog_hotspot_off_no">Keep on</string>
-    <string name="btn_hotspot_on">Hotspot ON</string>
-    <string name="btn_hotspot_off">Turn on Hotspot</string>
-    <string name="btn_auto_hotspot">Auto</string>
     <string name="btn_screen_off">Screen Off</string>
     <string name="btn_screen_on">Screen On</string>
     <string name="toast_thermal_warning">⚠️ Device is very hot. Mirroring quality may be reduced.</string>

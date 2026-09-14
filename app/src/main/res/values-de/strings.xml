@@ -65,22 +65,6 @@
     <string name="settings_res_720">720p (Normal)</string>
     <string name="settings_res_1080">1080p (Hoch)</string>
 
-    <!-- Auto Hotspot -->
-    <string name="settings_auto_hotspot">Automatischer Hotspot</string>
-    <string name="settings_auto_hotspot_title">Hotspot automatisch umschalten</string>
-    <string name="settings_auto_hotspot_description">Hotspot beim Starten der Spiegelung automatisch einschalten und beim Stoppen ausschalten. Erfordert Shizuku.</string>
-    <string name="toast_hotspot_enabling">Aktiviere Hotspot...</string>
-    <string name="toast_hotspot_enabled">Hotspot aktiviert</string>
-    <string name="toast_hotspot_failed">Hotspot konnte nicht aktiviert werden. Prüfen Sie, ob Shizuku läuft.</string>
-    <string name="toast_hotspot_disabled">Hotspot deaktiviert</string>
-    <string name="dialog_hotspot_off_title">Hotspot ausschalten?</string>
-    <string name="dialog_hotspot_off_message">Der Hotspot wurde für die Spiegelung eingeschaltet. Möchten Sie ihn ausschalten?</string>
-    <string name="dialog_hotspot_off_yes">Ausschalten</string>
-    <string name="dialog_hotspot_off_no">Anlassen</string>
-    <string name="btn_hotspot_on">Hotspot AN</string>
-    <string name="btn_hotspot_off">Hotspot einschalten</string>
-    <string name="btn_auto_hotspot">Auto</string>
-
     <!-- Language -->
     <string name="settings_language">Sprache</string>
     <string name="settings_language_system_default">Systemstandard</string>

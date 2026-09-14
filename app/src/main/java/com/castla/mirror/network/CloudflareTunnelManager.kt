@@ -27,7 +27,7 @@ import java.io.InputStreamReader
  * 10+ permits `execve()` from (the app's own `filesDir` is `app_data_file`
  * and is blocked by the W^X policy: "error=13, Permission denied").
  */
-class CloudflareTunnelManager(private val context: Context) {
+class CloudflareTunnelManager private constructor(context: Context) {
 
     companion object {
         private const val TAG = "CloudflareTunnel"
@@ -37,6 +37,19 @@ class CloudflareTunnelManager(private val context: Context) {
         private const val LIB_NAME = "libcloudflared.so"
         // Regex to match the trycloudflare URL from cloudflared stdout
         private val URL_PATTERN = Regex("""https://[a-zA-Z0-9\-]+\.trycloudflare\.com""")
+
+        /**
+         * App-wide singleton so a running cloudflared process + `*.trycloudflare.com`
+         * URL survives mirroring-session boundaries. Without this, every session start
+         * spawns a fresh tunnel process and a new URL (the "constantly starting
+         * tunnel" symptom).
+         */
+        @Volatile private var instance: CloudflareTunnelManager? = null
+
+        fun getInstance(context: Context): CloudflareTunnelManager =
+            instance ?: synchronized(this) {
+                instance ?: CloudflareTunnelManager(context.applicationContext).also { instance = it }
+            }
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + Job())
@@ -75,7 +88,7 @@ class CloudflareTunnelManager(private val context: Context) {
      */
     fun start(localPort: Int = 9090) {
         if (_isRunning.value || _isStarting.value) {
-            Log.w(TAG, "Tunnel already running or starting")
+            Log.i(TAG, "Tunnel already running/starting — reusing existing tunnel")
             return
         }
 

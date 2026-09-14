@@ -287,46 +287,6 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Auto Hotspot
-            SettingSection(title = stringResource(R.string.settings_auto_hotspot)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = stringResource(R.string.settings_auto_hotspot_title),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = Color.White,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = stringResource(R.string.settings_auto_hotspot_description),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.White.copy(alpha = 0.6f)
-                        )
-                    }
-                    Switch(
-                        checked = settings.autoHotspot,
-                        onCheckedChange = { enabled ->
-                            if (!isStreaming) onSettingsChanged(settings.copy(autoHotspot = enabled))
-                        },
-                        enabled = !isStreaming,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = Color(0xFF2979FF),
-                            uncheckedThumbColor = Color.White.copy(alpha = 0.7f),
-                            uncheckedTrackColor = Color.White.copy(alpha = 0.2f),
-                            uncheckedBorderColor = Color.Transparent
-                        )
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
             // Remote access & security: password gate + permanent Cloudflare URL
             run {
                 val context = LocalContext.current

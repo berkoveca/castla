@@ -781,43 +781,6 @@ class ShizukuSetup {
         }
     }
 
-    /**
-     * Restart WiFi tethering with CGNAT IP (100.64.0.1/24).
-     * Returns diagnostic log, or null if service not connected.
-     */
-    fun restartTetheringWithCgnat(): String? {
-        val service = privilegedService
-        if (service == null) {
-            Log.w(TAG, "restartTetheringWithCgnat: service not connected")
-            if (isAvailable() && hasPermission()) {
-                bindPrivilegedService()
-            }
-            return null
-        }
-        return try {
-            service.restartTetheringWithCgnat()
-        } catch (e: Exception) {
-            Log.e(TAG, "restartTetheringWithCgnat failed", e)
-            "Exception: ${e.message}"
-        }
-    }
-
-    /**
-     * Start WiFi tethering (hotspot) via the privileged service.
-     * Returns true if the request was submitted.
-     */
-    fun startWifiTethering(): Boolean {
-        val result = exec("__HOTSPOT_ON__")
-        Log.i(TAG, "startWifiTethering result: $result")
-        return result != null && result.startsWith("OK")
-    }
-
-    fun stopWifiTethering(): Boolean {
-        val result = exec("__HOTSPOT_OFF__")
-        Log.i(TAG, "stopWifiTethering result: $result")
-        return result != null && result.startsWith("OK")
-    }
-
     /** Mutex serializing hardening passes so concurrent callers see consistent results. */
     private val hardenMutex = Any()
 

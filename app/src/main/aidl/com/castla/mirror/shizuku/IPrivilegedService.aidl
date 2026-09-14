@@ -59,14 +59,6 @@ interface IPrivilegedService {
     String setupTeslaNetworking(String ifName, String virtualIp) = 9;
 
     /**
-     * Restart WiFi tethering with a CGNAT IP (100.64.0.1/24) so Tesla browser
-     * can reach the phone. Uses TetheringManager via reflection from Shizuku's
-     * elevated process (uid 2000).
-     * Returns a diagnostic log string.
-     */
-    String restartTetheringWithCgnat() = 10;
-
-    /**
      * Launch an app on a specific virtual display.
      * Uses am start --display to place the app on the given display.
      */
@@ -134,17 +126,4 @@ interface IPrivilegedService {
      * Stop the system audio capture started by startSystemAudioCapture().
      */
     void stopSystemAudioCapture() = 21;
-
-    /**
-     * Start WiFi tethering (hotspot) using ConnectivityManager/TetheringManager
-     * reflection from the privileged process (shell uid has TETHER_PRIVILEGED).
-     * Returns true if the request was submitted successfully.
-     */
-    boolean startWifiTethering() = 22;
-
-    /**
-     * Stop WiFi tethering (hotspot).
-     * Returns true if the request was submitted successfully.
-     */
-    boolean stopWifiTethering() = 23;
 }

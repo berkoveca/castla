@@ -11,8 +11,7 @@ data class StreamSettings(
     val audioEnabled: Boolean = false,
     val mirroringMode: MirroringMode = MirroringMode.FULL_SCREEN,
     val targetAppPackage: String = "",
-    val targetAppLabel: String = "",
-    val autoHotspot: Boolean = true
+    val targetAppLabel: String = ""
 ) {
     enum class Resolution(val maxHeight: Int, val label: String) {
         AUTO(720, "Auto"),
@@ -34,7 +33,6 @@ data class StreamSettings(
         private const val KEY_MIRRORING_MODE = "mirroring_mode"
         private const val KEY_TARGET_APP_PACKAGE = "target_app_package"
         private const val KEY_TARGET_APP_LABEL = "target_app_label"
-        private const val KEY_AUTO_HOTSPOT = "auto_hotspot"
 
         /** Sentinel value indicating auto FPS mode. Must not collide with real FPS values. */
         const val FPS_AUTO = 0
@@ -57,8 +55,7 @@ data class StreamSettings(
                     MirroringMode.valueOf(prefs.getString(KEY_MIRRORING_MODE, MirroringMode.FULL_SCREEN.name)!!)
                 } catch (_: Exception) { MirroringMode.FULL_SCREEN },
                 targetAppPackage = prefs.getString(KEY_TARGET_APP_PACKAGE, "") ?: "",
-                targetAppLabel = prefs.getString(KEY_TARGET_APP_LABEL, "") ?: "",
-                autoHotspot = prefs.getBoolean(KEY_AUTO_HOTSPOT, true)
+                targetAppLabel = prefs.getString(KEY_TARGET_APP_LABEL, "") ?: ""
             )
         }
 
@@ -70,7 +67,6 @@ data class StreamSettings(
                 .putString(KEY_MIRRORING_MODE, settings.mirroringMode.name)
                 .putString(KEY_TARGET_APP_PACKAGE, settings.targetAppPackage)
                 .putString(KEY_TARGET_APP_LABEL, settings.targetAppLabel)
-                .putBoolean(KEY_AUTO_HOTSPOT, settings.autoHotspot)
                 .apply()
         }
     }

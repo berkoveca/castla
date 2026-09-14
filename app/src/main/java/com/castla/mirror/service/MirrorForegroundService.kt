@@ -146,6 +146,14 @@ class MirrorForegroundService : Service() {
         private const val SHELL_TIMEOUT_MS = 800L
         private const val VERIFY_BACKOFF_MS = 400L
         private const val BOUNDS_TOLERANCE_PX = 16
+
+        // Cloudflare tunnel liveness: a session that starts the tunnel but has no
+        // browser connect within this window gets its process stopped cleanly, so
+        // an unused session doesn't leave cloudflared running forever.
+        private const val TUNNEL_IDLE_TIMEOUT_MS = 60_000L
+        // After a session ends, the tunnel is kept (reused by a fast restart) but
+        // stopped if no new session adopts it within this window.
+        private const val TUNNEL_ORPHAN_TIMEOUT_MS = 30_000L
     }
 
     /** Binder for local (same-process) binding */
@@ -164,6 +172,13 @@ class MirrorForegroundService : Service() {
     private var touchInjector: TouchInjector? = null
     private var virtualDisplayManager: VirtualDisplayManager? = null
     private var cloudflareTunnel: CloudflareTunnelManager? = null
+    /** Idle watchdog: stops the tunnel if no browser connects within the window. */
+    private var tunnelIdleJob: Job? = null
+    /** Orphan watchdog: stops the retained tunnel if no session adopts it in time. */
+    private val tunnelOrphanStopRunnable = Runnable {
+        Log.i(TAG, "No session adopted the tunnel within orphan window — stopping it cleanly")
+        stopCloudflareTunnel()
+    }
     private var shizukuSetup: ShizukuSetup? = null
     private var currentWidth: Int = 0
     private var currentHeight: Int = 0
@@ -871,7 +886,7 @@ class MirrorForegroundService : Service() {
         try { jpegEncoder?.release() } catch (e: Exception) { Log.w(TAG, "Failed to release jpeg encoder", e) }
         try { touchInjector?.release() } catch (e: Exception) { Log.w(TAG, "Failed to release touch injector", e) }
         try { mirrorServer?.stop() } catch (e: Exception) { Log.w(TAG, "Failed to stop mirror server", e) }
-        try { stopCloudflareTunnel() } catch (e: Exception) { Log.w(TAG, "Failed to stop cloudflare tunnel", e) }
+        try { retainCloudflareTunnelForRestart() } catch (e: Exception) { Log.w(TAG, "Failed to retain cloudflare tunnel", e) }
 
         virtualDisplayManager = null
         shizukuSetup = null
@@ -889,8 +904,13 @@ class MirrorForegroundService : Service() {
 
     private fun startCloudflareTunnel() {
         try {
-            val tunnel = CloudflareTunnelManager(this)
+            // Reuse the app-wide singleton so an already-running tunnel process and
+            // URL survive session restarts instead of spawning a new one each time.
+            val tunnel = CloudflareTunnelManager.getInstance(this)
             cloudflareTunnel = tunnel
+
+            // A new session just adopted the retained tunnel — cancel the orphan stop.
+            mainHandler.removeCallbacks(tunnelOrphanStopRunnable)
 
             // Collect tunnel URL changes and forward to the static flow
             serviceScope.launch {
@@ -916,12 +936,27 @@ class MirrorForegroundService : Service() {
 
             tunnel.start(MirrorServer.DEFAULT_PORT)
             Log.i(TAG, "Cloudflare tunnel start requested")
+
+            // Idle watchdog: if no browser connects to reach this session's server
+            // within the window, stop the tunnel cleanly so an unused session doesn't
+            // leave cloudflared running. Cancelled as soon as a browser connects.
+            tunnelIdleJob?.cancel()
+            tunnelIdleJob = serviceScope.launch {
+                kotlinx.coroutines.delay(TUNNEL_IDLE_TIMEOUT_MS)
+                if (!browserConnected && !isCleanupInProgress) {
+                    Log.i(TAG, "No browser connected within ${TUNNEL_IDLE_TIMEOUT_MS}ms — stopping tunnel")
+                    stopCloudflareTunnel()
+                }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start Cloudflare tunnel", e)
         }
     }
 
     private fun stopCloudflareTunnel() {
+        tunnelIdleJob?.cancel()
+        tunnelIdleJob = null
+        mainHandler.removeCallbacks(tunnelOrphanStopRunnable)
         try {
             cloudflareTunnel?.stop()
         } catch (e: Exception) {
@@ -931,6 +966,22 @@ class MirrorForegroundService : Service() {
         _tunnelUrlFlow.value = null
         _tunnelActiveFlow.value = false
         _tunnelErrorFlow.value = null
+    }
+
+    /**
+     * Session teardown WITHOUT killing the tunnel: the process + `*.trycloudflare.com`
+     * URL are retained so a fast restart reuses them (no churn). If no new session
+     * adopts the tunnel within [TUNNEL_ORPHAN_TIMEOUT_MS] it is stopped cleanly.
+     */
+    private fun retainCloudflareTunnelForRestart() {
+        tunnelIdleJob?.cancel()
+        tunnelIdleJob = null
+        _tunnelUrlFlow.value = null
+        _tunnelActiveFlow.value = false
+        _tunnelErrorFlow.value = null
+        mainHandler.removeCallbacks(tunnelOrphanStopRunnable)
+        mainHandler.postDelayed(tunnelOrphanStopRunnable, TUNNEL_ORPHAN_TIMEOUT_MS)
+        Log.i(TAG, "Tunnel retained for restart (orphan stop in ${TUNNEL_ORPHAN_TIMEOUT_MS}ms)")
     }
 
     private fun startAbrLoop() {
@@ -2781,6 +2832,12 @@ class MirrorForegroundService : Service() {
 
     private fun onBrowserConnected() {
         try {
+            // A browser reached this session — the tunnel is in active use, so cancel
+            // the idle-stop watchdog (and any orphan stop from a previous session).
+            tunnelIdleJob?.cancel()
+            tunnelIdleJob = null
+            mainHandler.removeCallbacks(tunnelOrphanStopRunnable)
+
             acquireWakeLocks()
 
             // Send current thermal status to new browser client for profile auto-switching

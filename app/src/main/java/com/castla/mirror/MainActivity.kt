@@ -59,7 +59,6 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.castla.mirror.network.IpSelector
 import com.castla.mirror.network.NetworkMonitor
 import com.castla.mirror.network.NetworkState
-import com.castla.mirror.service.HotspotClientDetector
 import com.castla.mirror.service.MirrorForegroundService
 import com.castla.mirror.service.TeslaBleScanner
 import com.castla.mirror.service.TeslaDetectNotifier
@@ -101,11 +100,8 @@ class MainActivity : AppCompatActivity() {
     private var isShizukuOnPowerAllowlist by mutableStateOf(false)
     private var isShizukuServiceConnected by mutableStateOf(false)
     private var showShizukuPermissionDialog by mutableStateOf(false)
-    private var showHotspotOffDialog by mutableStateOf(false)
     private var showUsbConfigWarningDialog by mutableStateOf(false)
     private var teslaAutoDetectEnabled by mutableStateOf(false)
-    private var hotspotEnabledByApp = false
-    private var isHotspotActive by mutableStateOf(false)
     private var isPanelOff by mutableStateOf(false)
     private var cloudflareTunnelUrl by mutableStateOf<String?>(null)
     private var cloudflareTunnelActive by mutableStateOf(false)
@@ -253,14 +249,6 @@ class MainActivity : AppCompatActivity() {
                             bindRequested = false
                         }
                         updateServerUrl()
-                        // Clean up hotspot that was auto-enabled by the app
-                        if (!pendingStartAfterCleanup && hotspotEnabledByApp && shizukuSetup.serviceConnected.value) {
-                            hotspotEnabledByApp = false
-                            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                                disableHotspot()
-                                Log.i(TAG, "Auto-disabled hotspot after external service stop")
-                            }
-                        }
                     }
                 }
             }
@@ -384,16 +372,8 @@ class MainActivity : AppCompatActivity() {
                         onOpenShizuku = { openShizukuApp() },
                         onGrantShizukuPermission = { shizukuSetup.requestPermission() },
                         shizukuDownloadProgress = shizukuDownloadProgress,
-                        isHotspotActive = isHotspotActive,
-                        onToggleHotspot = { toggleHotspot() },
                         isPanelOff = isPanelOff,
                         onTogglePanelOff = { togglePanelOff() },
-                        autoHotspot = streamSettings.autoHotspot,
-                        onAutoHotspotChanged = { enabled ->
-                            Log.i(TAG, "Auto-hotspot changed: $enabled")
-                            streamSettings = streamSettings.copy(autoHotspot = enabled)
-                            StreamSettings.save(this@MainActivity, streamSettings)
-                        },
                         cloudflareTunnelUrl = cloudflareTunnelUrl,
                         cloudflareTunnelActive = cloudflareTunnelActive,
                         cloudflareTunnelError = cloudflareTunnelError,
@@ -416,89 +396,6 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
                     )
-                }
-
-                // Hotspot turn-off dialog
-                if (showHotspotOffDialog) {
-                    androidx.compose.ui.window.Dialog(
-                        onDismissRequest = { }
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(24.dp))
-                                .background(Color(0xFF1A1A2E))
-                                .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(24.dp))
-                                .padding(24.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Text(
-                                    text = stringResource(id = R.string.dialog_hotspot_off_title),
-                                    style = MaterialTheme.typography.titleLarge,
-                                    color = Color.White,
-                                    fontWeight = FontWeight.ExtraBold
-                                )
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text(
-                                    text = stringResource(id = R.string.dialog_hotspot_off_message),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = Color.White.copy(alpha = 0.7f),
-                                    textAlign = TextAlign.Center
-                                )
-                                Spacer(modifier = Modifier.height(24.dp))
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    OutlinedButton(
-                                        onClick = {
-                                            showHotspotOffDialog = false
-                                            hotspotEnabledByApp = false
-                                        },
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .height(48.dp),
-                                        shape = RoundedCornerShape(14.dp),
-                                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.3f))
-                                    ) {
-                                        Text(
-                                            text = stringResource(id = R.string.dialog_hotspot_off_no),
-                                            color = Color.White,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                    Button(
-                                        onClick = {
-                                            showHotspotOffDialog = false
-                                            hotspotEnabledByApp = false
-                                            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                                                disableHotspot()
-                                                runOnUiThread {
-                                                    Toast.makeText(this@MainActivity, getString(R.string.toast_hotspot_disabled), Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                        },
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .height(48.dp),
-                                        shape = RoundedCornerShape(14.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = Color(0xFFFF5252)
-                                        )
-                                    ) {
-                                        Text(
-                                            text = stringResource(id = R.string.dialog_hotspot_off_yes),
-                                            color = Color.White,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
 
                 if (showUsbConfigWarningDialog) {
@@ -683,9 +580,7 @@ class MainActivity : AppCompatActivity() {
 
     // Trusts NetworkMonitor's address (a learned one once a browser has reached
     // us, the priority pick before that). Until a real connection settles it the
-    // pick is a guess, and on some devices a tethered client cannot reach the
-    // hotspot's own address even while connected to that hotspot (issue #51),
-    // so the remaining candidates are offered alongside it.
+    // pick is a guess, so the remaining candidates are offered alongside it.
     private fun updateServerUrl() {
         val ip = currentIp
         serverUrl = urlFor(ip)
@@ -694,61 +589,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun urlFor(ip: String): String =
         IpSelector.advertiseUrl(ip, MirrorServer.DEFAULT_PORT)
-
-    /**
-     * Enable WiFi tethering (hotspot) via Shizuku's privileged service.
-     * Uses TetheringManager/ConnectivityManager Java API (most reliable).
-     */
-    private suspend fun enableHotspot(): Boolean {
-        if (!shizukuSetup.serviceConnected.value) {
-            Log.w(TAG, "enableHotspot: Shizuku service not connected")
-            return false
-        }
-        val success = shizukuSetup.startWifiTethering()
-        Log.i(TAG, "enableHotspot: startWifiTethering returned $success")
-        if (success) {
-            // Give tethering time to initialize
-            kotlinx.coroutines.delay(2000)
-        }
-        // Hotspot interfaces don't reliably produce connectivity callbacks
-        networkMonitor.refresh()
-        return success
-    }
-
-    private suspend fun disableHotspot() {
-        if (!shizukuSetup.serviceConnected.value) {
-            Log.w(TAG, "disableHotspot: Shizuku service not connected")
-            return
-        }
-        val success = shizukuSetup.stopWifiTethering()
-        Log.i(TAG, "disableHotspot: stopWifiTethering returned $success")
-        if (success) {
-            // OEM teardown time varies and callbacks are unreliable — observe the
-            // interface actually disappearing instead of a fixed delay (max ~3s)
-            var waited = 0
-            while (findHotspotInterface() != null && waited < 3000) {
-                kotlinx.coroutines.delay(250)
-                waited += 250
-            }
-        }
-        networkMonitor.refresh()
-    }
-
-    private fun refreshHotspotStatus() {
-        // Check hotspot status without requiring Shizuku by inspecting network interfaces directly
-        try {
-            val hotspotNames = listOf("swlan0", "wlan1", "ap0", "softap0")
-            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()?.toList() ?: emptyList()
-            val active = interfaces.any { iface ->
-                iface.isUp && hotspotNames.any { name -> iface.name.contains(name) }
-            }
-            isHotspotActive = active
-            Log.d(TAG, "refreshHotspotStatus: active=$active (interfaces=${interfaces.map { it.name }})")
-        } catch (e: Exception) {
-            Log.w(TAG, "refreshHotspotStatus failed", e)
-            isHotspotActive = false
-        }
-    }
 
     private fun togglePanelOff() {
         val service = mirrorService ?: MirrorForegroundService.instance ?: return
@@ -763,62 +603,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-
-    private fun toggleHotspot() {
-        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            // If privileged service is not connected, try to bind and wait
-            if (!shizukuSetup.serviceConnected.value) {
-                if (shizukuSetup.isAvailable() && shizukuSetup.hasPermission()) {
-                    shizukuSetup.bindPrivilegedService()
-                    // Wait up to 3 seconds for connection
-                    var waited = 0
-                    while (!shizukuSetup.serviceConnected.value && waited < 3000) {
-                        kotlinx.coroutines.delay(200)
-                        waited += 200
-                    }
-                }
-                if (!shizukuSetup.serviceConnected.value) {
-                    runOnUiThread {
-                        Toast.makeText(this@MainActivity, getString(R.string.toast_hotspot_failed), Toast.LENGTH_SHORT).show()
-                    }
-                    return@launch
-                }
-            }
-
-            if (isHotspotActive) {
-                disableHotspot()
-                runOnUiThread {
-                    Toast.makeText(this@MainActivity, getString(R.string.toast_hotspot_disabled), Toast.LENGTH_SHORT).show()
-                    isHotspotActive = false
-                }
-            } else {
-                runOnUiThread {
-                    Toast.makeText(this@MainActivity, getString(R.string.toast_hotspot_enabling), Toast.LENGTH_SHORT).show()
-                }
-                val success = enableHotspot()
-                runOnUiThread {
-                    if (success) {
-                        Toast.makeText(this@MainActivity, getString(R.string.toast_hotspot_enabled), Toast.LENGTH_SHORT).show()
-                        isHotspotActive = true
-                        hotspotEnabledByApp = true
-                    } else {
-                        Toast.makeText(this@MainActivity, getString(R.string.toast_hotspot_failed), Toast.LENGTH_SHORT).show()
-                    }
-                    updateServerUrl()
-                }
-            }
-        }
-    }
-
-    private fun findHotspotInterface(): String? {
-        val candidates = listOf("swlan0", "wlan1", "ap0", "softap0")
-        val result = shizukuSetup.exec("ip -o addr show") ?: return null
-        for (name in candidates) {
-            if (result.contains(name)) return name
-        }
-        return null
-    }
-
 
     private fun isShizukuInstalled(): Boolean {
         return try {
@@ -978,7 +762,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ── Tesla Auto-Detect (Hotspot client + BLE) ──────────────────────
+    // ── Tesla Auto-Detect (BLE) ──────────────────────
 
     private fun loadAutoDetectState() {
         teslaAutoDetectEnabled = getSharedPreferences("castla_settings", MODE_PRIVATE)
@@ -1140,7 +924,7 @@ class MainActivity : AppCompatActivity() {
 
         if (MirrorForegroundService.isServiceRunning || mirrorService?.isRunning == true) {
             queueStartAfterCleanup("service_still_running")
-            stopMirrorService(askHotspot = false, preservePreparingState = true)
+            stopMirrorService(preservePreparingState = true)
             return
         }
 
@@ -1198,34 +982,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startMirrorService(resultCode: Int, data: Intent) {
-        // Auto-enable hotspot if setting is on, Shizuku is available, and hotspot is not already active
-        val needHotspot = streamSettings.autoHotspot && shizukuSetup.serviceConnected.value
-        if (needHotspot) {
-            val alreadyActive = findHotspotInterface() != null
-            if (alreadyActive) {
-                Log.i(TAG, "Hotspot already active — skipping enableHotspot, starting service directly")
-                isHotspotActive = true
-                launchMirrorService(resultCode, data)
-            } else {
-                Toast.makeText(this, getString(R.string.toast_hotspot_enabling), Toast.LENGTH_SHORT).show()
-                lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                    val success = enableHotspot()
-                    hotspotEnabledByApp = success
-                    runOnUiThread {
-                        if (success) {
-                            Toast.makeText(this@MainActivity, getString(R.string.toast_hotspot_enabled), Toast.LENGTH_SHORT).show()
-                            isHotspotActive = true
-                        } else {
-                            Toast.makeText(this@MainActivity, getString(R.string.toast_hotspot_failed), Toast.LENGTH_SHORT).show()
-                        }
-                        updateServerUrl()
-                        launchMirrorService(resultCode, data)
-                    }
-                }
-            }
-        } else {
-            launchMirrorService(resultCode, data)
-        }
+        launchMirrorService(resultCode, data)
     }
 
     private fun launchMirrorService(resultCode: Int, data: Intent) {
@@ -1253,7 +1010,6 @@ class MainActivity : AppCompatActivity() {
         }
         bindRequested = bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
         isStreaming = true
-        refreshHotspotStatus()
         Log.i(TAG, "isStreaming=true, isPreparing=$isPreparing (service started)")
 
         // 서비스 바인드 + 서버 실행 확인 후 최소 2초 뒤에 preparing 해제
@@ -1283,9 +1039,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun stopMirrorService(askHotspot: Boolean = true, preservePreparingState: Boolean = false) {
-        val shouldAskHotspot = askHotspot && hotspotEnabledByApp
-
+    private fun stopMirrorService(preservePreparingState: Boolean = false) {
         if (serviceBound || bindRequested) {
             try { unbindService(serviceConnection) } catch (_: IllegalArgumentException) {}
             serviceBound = false
@@ -1297,14 +1051,8 @@ class MainActivity : AppCompatActivity() {
         if (!preservePreparingState) {
             isPreparing = false
         }
-        isHotspotActive = false
         updateServerUrl()
         com.castla.mirror.widget.MirrorWidgetProvider.updateAllWidgets(this)
-
-        // Ask user whether to turn off hotspot
-        if (shouldAskHotspot) {
-            showHotspotOffDialog = true
-        }
     }
 }
 
@@ -1324,12 +1072,8 @@ fun CastlaScreen(
     onOpenShizuku: () -> Unit,
     onGrantShizukuPermission: () -> Unit = {},
     shizukuDownloadProgress: Float = -1f,
-    isHotspotActive: Boolean = false,
-    onToggleHotspot: () -> Unit = {},
     isPanelOff: Boolean = false,
     onTogglePanelOff: () -> Unit = {},
-    autoHotspot: Boolean = false,
-    onAutoHotspotChanged: (Boolean) -> Unit = {},
     cloudflareTunnelUrl: String? = null,
     cloudflareTunnelActive: Boolean = false,
     cloudflareTunnelError: String? = null,
@@ -1555,71 +1299,6 @@ fun CastlaScreen(
                                     fontSize = 14.sp,
                                     color = Color.White.copy(alpha = 0.5f),
                                     textAlign = TextAlign.Center
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Hotspot toggle button + auto-hotspot switch — only visible when streaming
-            AnimatedVisibility(visible = isStreaming) {
-                Column {
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            onClick = onToggleHotspot,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(52.dp),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = if (isHotspotActive) {
-                                ButtonDefaults.buttonColors(containerColor = Color(0xFF69F0AE))
-                            } else {
-                                ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.15f))
-                            },
-                            border = if (!isHotspotActive) BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)) else null
-                        ) {
-                            Text(
-                                text = if (isHotspotActive)
-                                    stringResource(id = R.string.btn_hotspot_on)
-                                else
-                                    stringResource(id = R.string.btn_hotspot_off),
-                                fontWeight = FontWeight.Bold,
-                                color = if (isHotspotActive) Color.Black else Color.White
-                            )
-                        }
-                        // Auto-hotspot toggle
-                        Box(
-                            modifier = Modifier
-                                .height(52.dp)
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(Color.White.copy(alpha = 0.1f))
-                                .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(16.dp))
-                                .padding(horizontal = 12.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = stringResource(id = R.string.btn_auto_hotspot),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color.White.copy(alpha = 0.8f),
-                                    fontWeight = FontWeight.Medium
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Switch(
-                                    checked = autoHotspot,
-                                    onCheckedChange = onAutoHotspotChanged,
-                                    colors = SwitchDefaults.colors(
-                                        checkedThumbColor = Color.White,
-                                        checkedTrackColor = Color(0xFF69F0AE),
-                                        uncheckedThumbColor = Color.White.copy(alpha = 0.7f),
-                                        uncheckedTrackColor = Color.White.copy(alpha = 0.2f)
-                                    )
                                 )
                             }
                         }
