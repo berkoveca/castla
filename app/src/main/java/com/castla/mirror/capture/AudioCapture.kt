@@ -338,16 +338,24 @@ class AudioCapture(
             usingRemoteSubmix = false
         }
 
-        // Stop audioRecord (AudioPlaybackCapture path)
+        // Stop audioRecord first — this unblocks any in-flight read() on the
+        // capture thread so it can finish without racing the codec teardown.
         try { audioRecord?.stop() } catch (_: Exception) {}
         captureThread?.join(2000)
         captureThread = null
-        try { encoder?.stop() } catch (_: Exception) {}
-        try { encoder?.release() } catch (_: Exception) {}
-        encoder = null
+
+        // Quit the encoder handler thread BEFORE stopping the codec.
+        // This ensures no new onInputBufferAvailable/onOutputBufferAvailable
+        // callbacks will fire after we call encoder.stop()/release().
         encoderThread?.quitSafely()
         encoderThread = null
         encoderHandler = null
+
+        // Now safe to stop and release the codec — no concurrent callbacks.
+        try { encoder?.stop() } catch (_: Exception) {}
+        try { encoder?.release() } catch (_: Exception) {}
+        encoder = null
+
         try { audioRecord?.release() } catch (_: Exception) {}
         audioRecord = null
         Log.i(TAG, "Audio capture stopped")

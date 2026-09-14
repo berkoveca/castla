@@ -42,6 +42,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -106,6 +107,8 @@ class MainActivity : AppCompatActivity() {
     private var hotspotEnabledByApp = false
     private var isHotspotActive by mutableStateOf(false)
     private var isPanelOff by mutableStateOf(false)
+    private var cloudflareTunnelUrl by mutableStateOf<String?>(null)
+    private var cloudflareTunnelActive by mutableStateOf(false)
     private var teslaBleScanner: TeslaBleScanner? = null
 
     // Shizuku download state
@@ -284,6 +287,22 @@ class MainActivity : AppCompatActivity() {
         }
 
         lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                MirrorForegroundService.tunnelUrlFlow.collect { url ->
+                    cloudflareTunnelUrl = url
+                }
+            }
+        }
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                MirrorForegroundService.tunnelActiveFlow.collect { active ->
+                    cloudflareTunnelActive = active
+                }
+            }
+        }
+
+        lifecycleScope.launch {
             shizukuSetup.state.collect { shizukuState ->
                 Log.i(TAG, "Shizuku state: $shizukuState")
                 val wasRunning = shizukuRunning
@@ -360,6 +379,8 @@ class MainActivity : AppCompatActivity() {
                             streamSettings = streamSettings.copy(autoHotspot = enabled)
                             StreamSettings.save(this@MainActivity, streamSettings)
                         },
+                        cloudflareTunnelUrl = cloudflareTunnelUrl,
+                        cloudflareTunnelActive = cloudflareTunnelActive,
                         currentVersion = updateManager.currentVersion,
                         latestVersion = updateManager.latestVersion,
                         updateAvailable = updateManager.updateAvailable,
@@ -1292,6 +1313,8 @@ fun CastlaScreen(
     onTogglePanelOff: () -> Unit = {},
     autoHotspot: Boolean = false,
     onAutoHotspotChanged: (Boolean) -> Unit = {},
+    cloudflareTunnelUrl: String? = null,
+    cloudflareTunnelActive: Boolean = false,
     currentVersion: String = "",
     latestVersion: String? = null,
     updateAvailable: Boolean = false,
@@ -1464,6 +1487,39 @@ fun CastlaScreen(
                                     color = Color.White.copy(alpha = 0.85f),
                                     textAlign = TextAlign.Center,
                                     modifier = Modifier.padding(vertical = 2.dp)
+                                )
+                            }
+                        }
+
+                        if (cloudflareTunnelActive) {
+                            Spacer(modifier = Modifier.height(20.dp))
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.15f),
+                                modifier = Modifier.padding(horizontal = 16.dp)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = stringResource(id = R.string.title_cloudflare_tunnel),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF7CB3FF),
+                                textAlign = TextAlign.Center,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            if (cloudflareTunnelUrl != null) {
+                                Text(
+                                    text = cloudflareTunnelUrl!!,
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = Color(0xFF7CB3FF),
+                                    textAlign = TextAlign.Center
+                                )
+                            } else {
+                                Text(
+                                    text = stringResource(id = R.string.status_tunnel_starting),
+                                    fontSize = 14.sp,
+                                    color = Color.White.copy(alpha = 0.5f),
+                                    textAlign = TextAlign.Center
                                 )
                             }
                         }

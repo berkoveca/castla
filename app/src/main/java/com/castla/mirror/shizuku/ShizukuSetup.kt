@@ -218,6 +218,14 @@ class ShizukuSetup {
             bindingInProgress = false
             userServiceBound = true
             userServiceConnectedAtMs = SystemClock.elapsedRealtime()
+            // Safety net: if the app process crashes, the privileged service
+            // will release all VDs and exit, preventing orphaned VDs that cause
+            // system_server NPE → phone reboot.
+            try {
+                privilegedService?.registerDeathToken(android.os.Binder())
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to register death token", e)
+            }
             Log.i(TAG, "Privileged service connected")
         }
 

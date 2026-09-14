@@ -268,6 +268,14 @@ class VirtualDisplayManager {
         if (releasedId >= 0) {
             try {
                 privilegedService?.releaseVirtualDisplay(releasedId)
+            } catch (e: android.os.DeadObjectException) {
+                // Binder is dead — the remote VD may be orphaned. Log prominently
+                // so this is diagnosable; the registerDeathToken safety net in
+                // PrivilegedService should handle cleanup.
+                Log.e(TAG, "CRITICAL: Binder dead releasing VD id=$releasedId — VD may be orphaned", e)
+                MirrorDiagnostics.log(DiagnosticEvent.VD_STOPPED, "id=$releasedId binder_dead")
+                privilegedService = null
+                isBound = false
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to release virtual display", e)
             }
@@ -288,6 +296,9 @@ class VirtualDisplayManager {
         if (releasedId >= 0) {
             try {
                 privilegedService?.releaseVirtualDisplay(releasedId)
+            } catch (e: android.os.DeadObjectException) {
+                Log.e(TAG, "CRITICAL: Binder dead releasing VD id=$releasedId during full release — VD may be orphaned", e)
+                MirrorDiagnostics.log(DiagnosticEvent.VD_STOPPED, "id=$releasedId binder_dead (full release)")
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to release virtual display", e)
             }

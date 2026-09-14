@@ -33,6 +33,7 @@ import com.castla.mirror.capture.ScreenCaptureManager
 import com.castla.mirror.capture.VideoEncoder
 import com.castla.mirror.capture.VirtualDisplayManager
 import com.castla.mirror.input.TouchInjector
+import com.castla.mirror.network.CloudflareTunnelManager
 import com.castla.mirror.server.MirrorServer
 import com.castla.mirror.shizuku.BinderConnectionTracker
 import com.castla.mirror.shizuku.IPrivilegedService
@@ -98,6 +99,14 @@ class MirrorForegroundService : Service() {
         private val _panelOffStateFlow = MutableStateFlow(ScreenOffState.ACTIVE)
         val panelOffStateFlow: StateFlow<ScreenOffState> = _panelOffStateFlow
 
+        /** Cloudflare tunnel URL — UI observes this to display the remote access URL. */
+        private val _tunnelUrlFlow = MutableStateFlow<String?>(null)
+        val tunnelUrlFlow: StateFlow<String?> = _tunnelUrlFlow
+
+        /** Whether cloudflare tunnel is starting/running. */
+        private val _tunnelActiveFlow = MutableStateFlow(false)
+        val tunnelActiveFlow: StateFlow<Boolean> = _tunnelActiveFlow
+
 
         var isServiceRunning: Boolean
             get() = _serviceRunningFlow.value
@@ -150,6 +159,7 @@ class MirrorForegroundService : Service() {
     private var audioOrchestrator: AudioCaptureOrchestrator? = null
     private var touchInjector: TouchInjector? = null
     private var virtualDisplayManager: VirtualDisplayManager? = null
+    private var cloudflareTunnel: CloudflareTunnelManager? = null
     private var shizukuSetup: ShizukuSetup? = null
     private var currentWidth: Int = 0
     private var currentHeight: Int = 0
@@ -322,6 +332,8 @@ class MirrorForegroundService : Service() {
         instance = this
         isServiceRunning = true
         isCleanupInProgress = false
+        _tunnelUrlFlow.value = null
+        _tunnelActiveFlow.value = false
         createNotificationChannel()
         observeAppLaunchRequests()
 
@@ -855,6 +867,7 @@ class MirrorForegroundService : Service() {
         try { jpegEncoder?.release() } catch (e: Exception) { Log.w(TAG, "Failed to release jpeg encoder", e) }
         try { touchInjector?.release() } catch (e: Exception) { Log.w(TAG, "Failed to release touch injector", e) }
         try { mirrorServer?.stop() } catch (e: Exception) { Log.w(TAG, "Failed to stop mirror server", e) }
+        try { stopCloudflareTunnel() } catch (e: Exception) { Log.w(TAG, "Failed to stop cloudflare tunnel", e) }
 
         virtualDisplayManager = null
         shizukuSetup = null
@@ -868,6 +881,46 @@ class MirrorForegroundService : Service() {
         isCleanupInProgress = false
         isServiceRunning = false
         Log.i(TAG, "Cleanup completed: $reason")
+    }
+
+    private fun startCloudflareTunnel() {
+        try {
+            val tunnel = CloudflareTunnelManager(this)
+            cloudflareTunnel = tunnel
+
+            // Collect tunnel URL changes and forward to the static flow
+            serviceScope.launch {
+                tunnel.tunnelUrl.collect { url ->
+                    _tunnelUrlFlow.value = url
+                }
+            }
+            serviceScope.launch {
+                tunnel.isRunning.collect { running ->
+                    _tunnelActiveFlow.value = running || tunnel.isStarting.value
+                }
+            }
+            serviceScope.launch {
+                tunnel.isStarting.collect { starting ->
+                    _tunnelActiveFlow.value = tunnel.isRunning.value || starting
+                }
+            }
+
+            tunnel.start(MirrorServer.DEFAULT_PORT)
+            Log.i(TAG, "Cloudflare tunnel start requested")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start Cloudflare tunnel", e)
+        }
+    }
+
+    private fun stopCloudflareTunnel() {
+        try {
+            cloudflareTunnel?.stop()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to stop Cloudflare tunnel", e)
+        }
+        cloudflareTunnel = null
+        _tunnelUrlFlow.value = null
+        _tunnelActiveFlow.value = false
     }
 
     private fun startAbrLoop() {
@@ -1163,6 +1216,9 @@ class MirrorForegroundService : Service() {
                     MirrorDiagnostics.log(DiagnosticEvent.SERVER_READY,
                         "port=${MirrorServer.DEFAULT_PORT} localProbe=${localHttpProbe()}")
                 }
+
+                // Start Cloudflare tunnel for remote access
+                startCloudflareTunnel()
             }
 
             Log.i(TAG, "Pipeline initialized (idle): ${width}x${height}, audio=$audioEnabled")
@@ -2895,6 +2951,12 @@ class MirrorForegroundService : Service() {
         if (!singleVdSplit) {
             releaseSecondaryPipeline(clearState = false)
         }
+
+        // Stop audio FIRST — if the Opus thread is mid-callback while the VD
+        // is released, a native crash on the handler thread can kill the app
+        // process, leaving orphaned VDs that reboot the phone.
+        audioOrchestrator?.stop()
+
         try { removeAllVdTasks() } catch (e: Exception) { Log.w(TAG, "Failed to remove VD tasks on disconnect", e) }
         tearDownVdSession("browser_disconnected")
         
@@ -2904,8 +2966,6 @@ class MirrorForegroundService : Service() {
         jpegEncoder?.release()
         jpegEncoder = null
         currentEncoderSurface = null
-
-        audioOrchestrator?.stop()
 
         abrJob?.cancel()
         abrJob = null
