@@ -138,6 +138,62 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         _error.value = null
     }
 
+    /**
+     * cloudflared (static Go) writes its real errors to stderr. It also does its
+     * own DNS resolution by reading `/etc/resolv.conf` — which does not exist on
+     * stock Android — so it quietly fails with "connection refused" to loopback
+     * :53. Capture stderr (bounded tail) so the UI can surface the TRUE cause
+     * instead of an opaque "exited without establishing a tunnel".
+     */
+    private val stderrTail = java.util.LinkedList<String>()
+
+    private fun collectStderr(proc: Process) {
+        Thread({
+            try {
+                val reader = BufferedReader(InputStreamReader(proc.errorStream))
+                var line: String?
+                while (reader.readLine().also { line = it } != null) {
+                    val l = line ?: continue
+                    Log.d(TAG, "cloudflared[err]: $l")
+                    synchronized(stderrTail) {
+                        stderrTail.add(l)
+                        while (stderrTail.size > 40) stderrTail.removeFirst()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "cloudflared stderr collector ended")
+            }
+        }, "cloudflared-stderr").also { it.isDaemon = true; it.start() }
+    }
+
+    private fun currentStderr(): List<String> = synchronized(stderrTail) { stderrTail.toList() }
+
+    private fun clearStderr() = synchronized(stderrTail) { stderrTail.clear() }
+
+    private fun failureMessage(fallback: String): String {
+        val lastStderr = currentStderr()
+        val exitCode = try { process?.waitFor() ?: -1 } catch (e: Exception) { -1 }
+        val meaningful = lastStderr.asReversed().firstOrNull {
+            it.trim().isNotEmpty() && !it.contains(" INF ")
+        }
+        val base = if (meaningful != null) {
+            val cleaned = meaningful.substringAfter("ERR ").trim().ifBlank { meaningful.trim() }
+            "cloudflared: $cleaned (exit $exitCode)"
+        } else {
+            fallback + " (exit $exitCode)"
+        }
+        val lower = lastStderr.joinToString(" ").lowercase()
+        return if (lower.contains("lookup") || lower.contains("resolver") ||
+            lower.contains("no such host") || lower.contains("connection refused")
+        ) {
+            "$base — DNS for this device is not reachable from the cloudflared binary. " +
+                "Android exposes no /etc/resolv.conf to it, so use the permanent (named) " +
+                "tunnel or connect to a network that supplies DNS to it."
+        } else {
+            base
+        }
+    }
+
     private fun startQuickTunnelProcess(localPort: Int) {
         val binary = binaryFile()
         if (!binary.exists()) {
@@ -162,8 +218,15 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         pb.environment()["SSL_CERT_DIR"] = "/system/etc/security/cacerts"
         pb.environment()["SSL_CERT_FILE"] = "/system/etc/security/cacerts/cacert.pem"
 
+        if (!File("/etc/resolv.conf").exists() && !File("/system/etc/resolv.conf").exists()) {
+            Log.w(TAG, "No resolv.conf on this device — cloudflared (static Go) must rely on the " +
+                "permanent tunnel or a network that provisions DNS into the OS")
+        }
+
         val proc = pb.start()
         process = proc
+        clearStderr()
+        collectStderr(proc)
 
         readerThread = Thread({
             try {
@@ -188,7 +251,7 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                     _tunnelUrl.value = null
                     _isRunning.value = false
                 } else {
-                    _error.value = "cloudflared exited without establishing a tunnel"
+                    _error.value = failureMessage("cloudflared exited without establishing a tunnel")
                 }
                 _isStarting.value = false
             } catch (e: InterruptedException) {
@@ -221,6 +284,8 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
 
         val proc = pb.start()
         process = proc
+        clearStderr()
+        collectStderr(proc)
 
         // Named tunnel hostname is known up front — surface it immediately.
         _tunnelUrl.value = TunnelSecurityConfig.load(context).namedTunnelUrl.ifBlank { null }
@@ -251,7 +316,7 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                 }
                 _isStarting.value = false
                 if (!registered) {
-                    _error.value = "cloudflared exited before registering the named tunnel"
+                    _error.value = failureMessage("cloudflared exited before registering the named tunnel")
                 }
             } catch (e: InterruptedException) {
                 Log.d(TAG, "Reader thread interrupted")
