@@ -27,7 +27,7 @@ import java.io.InputStreamReader
  * 10+ permits `execve()` from (the app's own `filesDir` is `app_data_file`
  * and is blocked by the W^X policy: "error=13, Permission denied").
  */
-class CloudflareTunnelManager private constructor(context: Context) {
+class CloudflareTunnelManager private constructor(private val context: Context) {
 
     companion object {
         private const val TAG = "CloudflareTunnel"
