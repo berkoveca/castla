@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.io.BufferedReader
 import java.io.File
+import java.io.IOException
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
@@ -88,10 +89,11 @@ class CloudflareTunnelManager(private val context: Context) {
                     Log.i(TAG, "Downloading cloudflared binary...")
                     downloadBinary()
                 }
+                ensureExecutable()
                 if (TunnelSecurityConfig.shouldUseNamedTunnel(config)) {
-                    startNamedTunnelProcess(config.namedTunnelToken)
+                    runWithRepair { startNamedTunnelProcess(config.namedTunnelToken) }
                 } else {
-                    startQuickTunnelProcess(localPort)
+                    runWithRepair { startQuickTunnelProcess(localPort) }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start tunnel", e)
@@ -99,6 +101,35 @@ class CloudflareTunnelManager(private val context: Context) {
                 _isStarting.value = false
             }
         }
+    }
+
+    /** Re-assert exec/read bits (owner + world) so install updates never leave a stale mode. */
+    private fun ensureExecutable() {
+        val f = binaryFile()
+        f.setExecutable(true, false)
+        f.setReadable(true, false)
+    }
+
+    /** If the cached binary cannot be executed (e.g. stale perms/label after a reinstall),
+     *  redownload a fresh copy and re-assert bits, then retry once. */
+    private fun runWithRepair(block: () -> Unit) {
+        try {
+            block()
+        } catch (e: IOException) {
+            Log.w(TAG, "Failed to run cloudflared (${e.message}) — re-downloading and retrying")
+            repairBinary()
+            block()
+        }
+    }
+
+    private fun repairBinary() {
+        try {
+            binaryFile().delete()
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not delete stale binary", e)
+        }
+        downloadBinary()
+        ensureExecutable()
     }
 
     fun stop() {
@@ -269,7 +300,7 @@ class CloudflareTunnelManager(private val context: Context) {
 
             Log.i(TAG, "Downloading from: $downloadUrl")
             downloadFile(downloadUrl, binaryFile())
-            binaryFile().setExecutable(true)
+            ensureExecutable()
             Log.i(TAG, "Binary downloaded and made executable")
         } finally {
             conn.disconnect()
