@@ -109,6 +109,9 @@ class MainActivity : AppCompatActivity() {
     private var isPanelOff by mutableStateOf(false)
     private var cloudflareTunnelUrl by mutableStateOf<String?>(null)
     private var cloudflareTunnelActive by mutableStateOf(false)
+    private var tunnelAuthEnabled by mutableStateOf(
+        com.castla.mirror.network.TunnelSecurity.load(this).authEnabled
+    )
     private var teslaBleScanner: TeslaBleScanner? = null
 
     // Shizuku download state
@@ -351,7 +354,11 @@ class MainActivity : AppCompatActivity() {
                             streamSettings = newSettings
                             StreamSettings.save(this@MainActivity, newSettings)
                         },
-                        onBackClick = { showSettings = false }
+                        onBackClick = {
+                            tunnelAuthEnabled =
+                                com.castla.mirror.network.TunnelSecurity.load(this@MainActivity).authEnabled
+                            showSettings = false
+                        }
                     )
                 } else {
                     CastlaScreen(
@@ -381,6 +388,7 @@ class MainActivity : AppCompatActivity() {
                         },
                         cloudflareTunnelUrl = cloudflareTunnelUrl,
                         cloudflareTunnelActive = cloudflareTunnelActive,
+                        tunnelAuthEnabled = tunnelAuthEnabled,
                         currentVersion = updateManager.currentVersion,
                         latestVersion = updateManager.latestVersion,
                         updateAvailable = updateManager.updateAvailable,
@@ -1315,6 +1323,7 @@ fun CastlaScreen(
     onAutoHotspotChanged: (Boolean) -> Unit = {},
     cloudflareTunnelUrl: String? = null,
     cloudflareTunnelActive: Boolean = false,
+    tunnelAuthEnabled: Boolean = false,
     currentVersion: String = "",
     latestVersion: String? = null,
     updateAvailable: Boolean = false,
@@ -1514,6 +1523,15 @@ fun CastlaScreen(
                                     color = Color(0xFF7CB3FF),
                                     textAlign = TextAlign.Center
                                 )
+                                if (tunnelAuthEnabled) {
+                                    Text(
+                                        text = stringResource(id = R.string.home_tunnel_password_protected),
+                                        fontSize = 13.sp,
+                                        color = Color.White.copy(alpha = 0.6f),
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.padding(top = 4.dp)
+                                    )
+                                }
                             } else {
                                 Text(
                                     text = stringResource(id = R.string.status_tunnel_starting),

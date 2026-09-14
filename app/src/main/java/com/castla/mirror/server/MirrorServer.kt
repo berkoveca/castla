@@ -10,6 +10,8 @@ import com.castla.mirror.diagnostics.DiagnosticEvent
 import com.castla.mirror.diagnostics.DiagnosticSanitizer
 import com.castla.mirror.diagnostics.MirrorDiagnostics
 import com.castla.mirror.network.ReachableIp
+import com.castla.mirror.network.TunnelSecurity
+import com.castla.mirror.network.TunnelSecurityConfig
 import com.castla.mirror.ott.OttCatalog
 import com.castla.mirror.utils.AppCategoryClassifier
 
@@ -20,6 +22,7 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
     companion object {
         private const val TAG = "MirrorServer"
         const val DEFAULT_PORT = 9090
+        private const val COOKIE_AUTH = "castla_auth"
     }
 
     private val primaryVideoSockets = mutableSetOf<VideoStreamSocket>()
@@ -380,6 +383,18 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
 
 
     override fun openWebSocket(handshake: IHTTPSession): WebSocket {
+        val config = TunnelSecurity.load(context)
+        if (config.authEnabled) {
+            val cookieValue = parseCookie(handshake.headers["cookie"], COOKIE_AUTH)
+            if (!TunnelSecurity.isValidSession(context, config, cookieValue)) {
+                Log.i(TAG, "Rejecting WebSocket handshake: missing/invalid auth cookie")
+                throw NanoWSD.WebSocketException(
+                    NanoWSD.WebSocketFrame.CloseCode.NormalClosure,
+                    "Unauthorized"
+                )
+            }
+        }
+
         val uri = handshake.uri
         val channel = handshake.parameters["channel"]?.firstOrNull()
             ?: if (uri.contains("secondary")) "secondary" else "primary"
@@ -396,8 +411,15 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         logHttpFirstContact(session)
         var uri = session.uri
         if (uri == "/") uri = "/index.html"
-        
-        // Handle API routes for Native Web Launcher
+
+        val config = TunnelSecurity.load(context)
+
+        // Password login — validate and issue the session cookie
+        if (uri == "/auth") {
+            return handleAuthSubmit(session, config)
+        }
+
+        // API routes bypass the auth gate (no sensitive data; used pre-login too)
         if (uri == "/api/apps") {
             return serveAppList()
         } else if (uri.startsWith("/api/icon")) {
@@ -406,8 +428,78 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
                 return serveAppIcon(pkg)
             }
         }
-        
+
+        // Auth gate — block every page until a valid session cookie is present
+        if (config.authEnabled) {
+            val cookieValue = parseCookie(session.headers["cookie"], COOKIE_AUTH)
+            if (!TunnelSecurity.isValidSession(context, config, cookieValue)) {
+                if (uri != "/login.html" && uri != "/favicon.ico") {
+                    return serveLoginPage()
+                }
+            }
+        }
+
         return serveAsset(uri)
+    }
+
+    private fun handleAuthSubmit(session: IHTTPSession, config: TunnelSecurityConfig): Response {
+        val submitted = session.parameters["password"]?.firstOrNull() ?: ""
+        if (config.authPassword.isNotEmpty() && submitted == config.authPassword) {
+            val token = TunnelSecurity.sessionToken(context, config.authPassword)
+            Log.i(TAG, "Auth success from ${session.remoteIpAddress}")
+            val resp = newFixedLengthResponse(
+                Response.Status.REDIRECT,
+                "text/html",
+                "<html><body>Redirecting...</body></html>"
+            )
+            resp.addHeader("Location", "/")
+            // 90-day cookie; survives pipeline restarts because the session secret
+            // is persistent. HttpOnly to keep the token off the page's JS.
+            resp.addHeader("Set-Cookie", "$COOKIE_AUTH=$token; Path=/; HttpOnly; Max-Age=7776000")
+            return resp
+        }
+        Log.w(TAG, "Auth failed from ${session.remoteIpAddress}")
+        return serveLoginPage(showError = true)
+    }
+
+    private fun serveLoginPage(showError: Boolean = false): Response {
+        var html = loginPageHtml()
+        if (showError) {
+            html = html.replace(
+                "<div class=\"error\" id=\"error\">",
+                "<div class=\"error visible\" id=\"error\">"
+            )
+        }
+        return newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", html)
+    }
+
+    private fun parseCookie(header: String?, name: String): String? {
+        val prefix = "$name="
+        header?.split(";")?.forEach { part ->
+            val trimmed = part.trim()
+            if (trimmed.startsWith(prefix)) {
+                val value = trimmed.substring(prefix.length)
+                if (value.isNotEmpty()) return value
+                return null
+            }
+        }
+        return null
+    }
+
+    private var cachedLoginHtml: String? = null
+    private fun loginPageHtml(): String {
+        cachedLoginHtml?.let { return it }
+        val html = try {
+            context.assets.open("web/login.html").bufferedReader(Charsets.UTF_8).use { it.readText() }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to read login.html", e)
+            "<!DOCTYPE html><html><body style=\"background:#0a0a12;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh\">" +
+                "<form method=\"post\" action=\"/auth\"><h2>Castla</h2><input type=\"password\" name=\"password\" placeholder=\"Password\" " +
+                "style=\"display:block;margin:12px 0;padding:10px;border-radius:8px;border:1px solid #555;background:#111;color:#fff\">" +
+                "<button type=\"submit\" style=\"padding:10px 24px;border:none;border-radius:8px;background:#64B5F6;color:#111;font-weight:bold\">Unlock</button></form></body></html>"
+        }
+        cachedLoginHtml = html
+        return html
     }
     
     private fun logHttpFirstContact(session: IHTTPSession) {

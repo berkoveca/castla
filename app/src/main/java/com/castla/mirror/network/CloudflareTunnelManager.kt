@@ -15,11 +15,16 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Manages a Cloudflare Quick Tunnel (`cloudflared tunnel --url`).
+ * Manages Cloudflare tunnels exposing the local MirrorServer (port 9090).
  *
- * The tunnel exposes the local MirrorServer (port 9090) to the internet via a
- * temporary `*.trycloudflare.com` URL. The binary is downloaded from
- * Cloudflare's GitHub releases on first use and cached in the app's files dir.
+ * Supports two modes:
+ *  - Quick tunnel: `cloudflared tunnel --url ...` → temporary
+ *    `*.trycloudflare.com` URL that changes each run.
+ *  - Named tunnel: `cloudflared tunnel run <token>` → permanent hostname
+ *    configured by the user in the Cloudflare Zero Trust dashboard.
+ *
+ * The binary is downloaded from Cloudflare's GitHub releases on first use and
+ * cached in the app's files dir.
  */
 class CloudflareTunnelManager(private val context: Context) {
 
@@ -58,7 +63,13 @@ class CloudflareTunnelManager(private val context: Context) {
     }
 
     /**
-     * Start the cloudflared tunnel pointing at the given local port.
+     * Start cloudflared pointing at the given local port.
+     *
+     * Two modes:
+     *  - Quick tunnel (default): `cloudflared tunnel --url ...` → temporary
+     *    `*.trycloudflare.com` URL parsed from stdout.
+     *  - Named tunnel: when a Zero Trust connector token is configured, runs
+     *    `cloudflared tunnel run <token>` for a permanent configured hostname.
      * Downloads the binary first if necessary.
      */
     fun start(localPort: Int = 9090) {
@@ -67,6 +78,7 @@ class CloudflareTunnelManager(private val context: Context) {
             return
         }
 
+        val config = TunnelSecurity.load(context)
         _isStarting.value = true
         _error.value = null
 
@@ -76,7 +88,11 @@ class CloudflareTunnelManager(private val context: Context) {
                     Log.i(TAG, "Downloading cloudflared binary...")
                     downloadBinary()
                 }
-                startProcess(localPort)
+                if (TunnelSecurity.hasNamedTunnel(config)) {
+                    startNamedTunnelProcess(config.namedTunnelToken)
+                } else {
+                    startQuickTunnelProcess(localPort)
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start tunnel", e)
                 _error.value = e.message ?: "Unknown error"
@@ -103,7 +119,7 @@ class CloudflareTunnelManager(private val context: Context) {
         _error.value = null
     }
 
-    private fun startProcess(localPort: Int) {
+    private fun startQuickTunnelProcess(localPort: Int) {
         val binary = binaryFile()
         if (!binary.exists()) {
             throw IllegalStateException("cloudflared binary not found at ${binary.absolutePath}")
@@ -156,6 +172,70 @@ class CloudflareTunnelManager(private val context: Context) {
                     _isRunning.value = false
                 }
                 _isStarting.value = false
+            } catch (e: InterruptedException) {
+                Log.d(TAG, "Reader thread interrupted")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error reading cloudflared output", e)
+                _error.value = e.message
+                _isStarting.value = false
+            }
+        }, "cloudflared-reader").also { it.isDaemon = true; it.start() }
+    }
+
+    /**
+     * Runs a permanent named tunnel using a Cloudflare Zero Trust connector
+     * token. The public hostname is static (configured by the user in the
+     * dashboard) and taken from [TunnelSecurityConfig.namedTunnelUrl].
+     */
+    private fun startNamedTunnelProcess(token: String) {
+        val binary = binaryFile()
+        if (!binary.exists()) {
+            throw IllegalStateException("cloudflared binary not found at ${binary.absolutePath}")
+        }
+
+        val cmd = listOf(binary.absolutePath, "tunnel", "run", token)
+        Log.i(TAG, "Starting NAMED tunnel: cloudflared tunnel run <redacted>")
+
+        val pb = ProcessBuilder(cmd)
+            .directory(context.filesDir)
+            .redirectErrorStream(true)
+        pb.environment()["SSL_CERT_DIR"] = "/system/etc/security/cacerts"
+        pb.environment()["SSL_CERT_FILE"] = "/system/etc/security/cacerts/cacert.pem"
+
+        val proc = pb.start()
+        process = proc
+
+        // Named tunnel hostname is known up front — surface it immediately.
+        _tunnelUrl.value = TunnelSecurity.load(context).namedTunnelUrl.ifBlank { null }
+
+        var registered = false
+        readerThread = Thread({
+            try {
+                val reader = BufferedReader(InputStreamReader(proc.inputStream))
+                var line: String?
+                while (reader.readLine().also { line = it } != null) {
+                    val l = line ?: continue
+                    Log.d(TAG, "cloudflared: $l")
+
+                    if (!registered &&
+                        (l.contains("Registered tunnel connection") || l.contains("Registered tunnel network"))
+                    ) {
+                        registered = true
+                        Log.i(TAG, "Named tunnel connection registered")
+                        _isRunning.value = true
+                        _isStarting.value = false
+                    }
+                }
+                // Process exited
+                Log.i(TAG, "cloudflared process exited")
+                if (_isRunning.value || registered) {
+                    _tunnelUrl.value = null
+                    _isRunning.value = false
+                }
+                _isStarting.value = false
+                if (!registered) {
+                    _error.value = "cloudflared exited before registering the named tunnel"
+                }
             } catch (e: InterruptedException) {
                 Log.d(TAG, "Reader thread interrupted")
             } catch (e: Exception) {

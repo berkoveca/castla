@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Castla Login</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { height: 100%; }
+        body {
+            background: #0a0a12;
+            color: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        .card {
+            width: 100%;
+            max-width: 340px;
+            padding: 32px 28px;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+        }
+        .logo {
+            text-align: center;
+            font-size: 30px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            margin-bottom: 6px;
+        }
+        .sub {
+            text-align: center;
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.55);
+            margin-bottom: 26px;
+        }
+        label {
+            display: block;
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 8px;
+        }
+        input[type=password] {
+            width: 100%;
+            height: 46px;
+            padding: 0 14px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.08);
+            color: #fff;
+            font-size: 16px;
+            outline: none;
+            -webkit-user-select: text;
+            user-select: text;
+        }
+        input[type=password]:focus { border-color: #64B5F6; }
+        input[type=password]::placeholder { color: rgba(255, 255, 255, 0.35); }
+        button {
+            width: 100%;
+            height: 46px;
+            border: none;
+            border-radius: 12px;
+            background: #64B5F6;
+            color: #111;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        button:active { background: #42A5F5; }
+        .error {
+            display: none;
+            text-align: center;
+            color: #ff8080;
+            font-size: 13px;
+            margin-top: 14px;
+        }
+        .error.visible { display: block; }
+        .note {
+            text-align: center;
+            color: rgba(255, 255, 255, 0.35);
+            font-size: 12px;
+            margin-top: 18px;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="logo">CASTLA</div>
+        <div class="sub">Enter the password to connect</div>
+        <form method="post" action="/auth">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" placeholder="••••••••" autocomplete="current-password">
+            <button type="submit">Unlock</button>
+        </form>
+        <div class="error" id="error">Wrong password. Try again.</div>
+        <div class="note">Password is set in the Castla app settings.</div>
+    </div>
+</body>
+</html>

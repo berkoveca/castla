@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -40,9 +41,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.os.LocaleListCompat
+import com.castla.mirror.network.TunnelSecurity
+import com.castla.mirror.network.TunnelSecurityConfig
 
 @Composable
 fun MeshGradientBackground(content: @Composable BoxScope.() -> Unit) {
@@ -323,6 +328,112 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
+            // Remote access & security: password gate + permanent Cloudflare URL
+            run {
+                val context = LocalContext.current
+                var tunnelCfg by remember { mutableStateOf(TunnelSecurityConfig.load(context)) }
+
+                fun update(block: (TunnelSecurityConfig) -> TunnelSecurityConfig) {
+                    val updated = block(tunnelCfg)
+                    tunnelCfg = updated
+                    TunnelSecurity.save(context, updated)
+                }
+
+                SettingSection(title = stringResource(R.string.settings_remote_access_title)) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        // Password gate toggle
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.settings_auth_enabled),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = stringResource(R.string.settings_auth_description),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White.copy(alpha = 0.6f)
+                                )
+                            }
+                            Switch(
+                                checked = tunnelCfg.authEnabled,
+                                onCheckedChange = { enabled -> update { it.copy(authEnabled = enabled) } },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = Color(0xFF2979FF),
+                                    uncheckedThumbColor = Color.White.copy(alpha = 0.7f),
+                                    uncheckedTrackColor = Color.White.copy(alpha = 0.2f),
+                                    uncheckedBorderColor = Color.Transparent
+                                )
+                            )
+                        }
+
+                        if (tunnelCfg.authEnabled) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = tunnelCfg.authPassword,
+                                onValueChange = { pw -> update { it.copy(authPassword = pw) } },
+                                enabled = !isStreaming,
+                                label = { Text(stringResource(R.string.settings_auth_password)) },
+                                placeholder = { Text(stringResource(R.string.settings_auth_password_hint)) },
+                                singleLine = true,
+                                visualTransformation = PasswordVisualTransformation(),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color.White),
+                                colors = authFieldColors(),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        Text(
+                            text = stringResource(R.string.settings_named_tunnel_label),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = Color.White,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.settings_named_tunnel_description),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White.copy(alpha = 0.6f)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = tunnelCfg.namedTunnelToken,
+                            onValueChange = { token -> update { it.copy(namedTunnelToken = token) } },
+                            enabled = !isStreaming,
+                            label = { Text(stringResource(R.string.settings_named_token)) },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color.White),
+                            colors = authFieldColors(),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = tunnelCfg.namedTunnelUrl,
+                            onValueChange = { url -> update { it.copy(namedTunnelUrl = url) } },
+                            enabled = !isStreaming,
+                            label = { Text(stringResource(R.string.settings_named_url)) },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color.White),
+                            colors = authFieldColors(),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
             // Language
             run {
                 val languages = listOf(
@@ -537,6 +648,22 @@ fun SettingsScreen(
         }
     }
 }
+
+@Composable
+private fun authFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedTextColor = Color.White,
+    unfocusedTextColor = Color.White,
+    focusedBorderColor = Color(0xFF64B5F6),
+    unfocusedBorderColor = Color.White.copy(alpha = 0.3f),
+    focusedLabelColor = Color(0xFF64B5F6),
+    unfocusedLabelColor = Color.White.copy(alpha = 0.6f),
+    focusedPlaceholderColor = Color.White.copy(alpha = 0.4f),
+    unfocusedPlaceholderColor = Color.White.copy(alpha = 0.4f),
+    cursorColor = Color(0xFF64B5F6),
+    disabledTextColor = Color.White.copy(alpha = 0.4f),
+    disabledBorderColor = Color.White.copy(alpha = 0.15f),
+    disabledLabelColor = Color.White.copy(alpha = 0.35f)
+)
 
 private suspend fun shareLogs(context: Context) {
     val files = withContext(Dispatchers.IO) { FileLogger.getLogFiles() }
