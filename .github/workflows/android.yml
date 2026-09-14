@@ -22,6 +22,11 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          # Google removed the legacy "tools" package from the SDK repository, so
+          # skip it; platforms/build-tools are preinstalled on the runner image and
+          # gradle auto-downloads anything else.
+          packages: platform-tools
 
       - name: Bundle cloudflared binary
         run: |
