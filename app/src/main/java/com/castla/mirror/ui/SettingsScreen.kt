@@ -363,7 +363,6 @@ fun SettingsScreen(
                             Switch(
                                 checked = tunnelCfg.authEnabled,
                                 onCheckedChange = { enabled -> update { it.copy(authEnabled = enabled) } },
-                                enabled = !isStreaming,
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = Color.White,
                                     checkedTrackColor = Color(0xFF2979FF),
@@ -379,7 +378,6 @@ fun SettingsScreen(
                             OutlinedTextField(
                                 value = tunnelCfg.authPassword,
                                 onValueChange = { pw -> update { it.copy(authPassword = pw) } },
-                                enabled = !isStreaming,
                                 label = { Text(stringResource(R.string.settings_auth_password)) },
                                 placeholder = { Text(stringResource(R.string.settings_auth_password_hint)) },
                                 singleLine = true,
@@ -416,7 +414,7 @@ fun SettingsScreen(
                             Switch(
                                 checked = tunnelCfg.namedTunnelEnabled && tunnelCfg.namedTunnelToken.isNotBlank(),
                                 onCheckedChange = { enabled -> update { it.copy(namedTunnelEnabled = enabled) } },
-                                enabled = !isStreaming && tunnelCfg.namedTunnelToken.isNotBlank(),
+                                enabled = tunnelCfg.namedTunnelToken.isNotBlank(),
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = Color.White,
                                     checkedTrackColor = Color(0xFF2979FF),
@@ -445,7 +443,6 @@ fun SettingsScreen(
                         OutlinedTextField(
                             value = tunnelCfg.namedTunnelToken,
                             onValueChange = { token -> update { it.copy(namedTunnelToken = token) } },
-                            enabled = !isStreaming,
                             label = { Text(stringResource(R.string.settings_named_token)) },
                             singleLine = true,
                             visualTransformation = PasswordVisualTransformation(),
@@ -457,7 +454,6 @@ fun SettingsScreen(
                         OutlinedTextField(
                             value = tunnelCfg.namedTunnelUrl,
                             onValueChange = { url -> update { it.copy(namedTunnelUrl = url) } },
-                            enabled = !isStreaming,
                             label = { Text(stringResource(R.string.settings_named_url)) },
                             singleLine = true,
                             textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color.White),

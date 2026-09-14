@@ -170,6 +170,8 @@ class CloudflareTunnelManager(private val context: Context) {
                 if (_isRunning.value) {
                     _tunnelUrl.value = null
                     _isRunning.value = false
+                } else {
+                    _error.value = "cloudflared exited without establishing a tunnel"
                 }
                 _isStarting.value = false
             } catch (e: InterruptedException) {

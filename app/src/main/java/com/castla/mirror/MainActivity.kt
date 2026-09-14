@@ -109,6 +109,7 @@ class MainActivity : AppCompatActivity() {
     private var isPanelOff by mutableStateOf(false)
     private var cloudflareTunnelUrl by mutableStateOf<String?>(null)
     private var cloudflareTunnelActive by mutableStateOf(false)
+    private var cloudflareTunnelError by mutableStateOf<String?>(null)
     private var tunnelAuthEnabled by mutableStateOf(false)
     private var teslaBleScanner: TeslaBleScanner? = null
 
@@ -305,6 +306,14 @@ class MainActivity : AppCompatActivity() {
         }
 
         lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                MirrorForegroundService.tunnelErrorFlow.collect { err ->
+                    cloudflareTunnelError = err
+                }
+            }
+        }
+
+        lifecycleScope.launch {
             shizukuSetup.state.collect { shizukuState ->
                 Log.i(TAG, "Shizuku state: $shizukuState")
                 val wasRunning = shizukuRunning
@@ -387,6 +396,7 @@ class MainActivity : AppCompatActivity() {
                         },
                         cloudflareTunnelUrl = cloudflareTunnelUrl,
                         cloudflareTunnelActive = cloudflareTunnelActive,
+                        cloudflareTunnelError = cloudflareTunnelError,
                         tunnelAuthEnabled = tunnelAuthEnabled,
                         currentVersion = updateManager.currentVersion,
                         latestVersion = updateManager.latestVersion,
@@ -1322,6 +1332,7 @@ fun CastlaScreen(
     onAutoHotspotChanged: (Boolean) -> Unit = {},
     cloudflareTunnelUrl: String? = null,
     cloudflareTunnelActive: Boolean = false,
+    cloudflareTunnelError: String? = null,
     tunnelAuthEnabled: Boolean = false,
     currentVersion: String = "",
     latestVersion: String? = null,
@@ -1499,7 +1510,7 @@ fun CastlaScreen(
                             }
                         }
 
-                        if (cloudflareTunnelActive) {
+                        if (cloudflareTunnelActive || cloudflareTunnelError != null) {
                             Spacer(modifier = Modifier.height(20.dp))
                             HorizontalDivider(
                                 color = Color.White.copy(alpha = 0.15f),
@@ -1509,7 +1520,7 @@ fun CastlaScreen(
                             Text(
                                 text = stringResource(id = R.string.title_cloudflare_tunnel),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFF7CB3FF),
+                                color = if (cloudflareTunnelError != null) Color(0xFFFF8A80) else Color(0xFF7CB3FF),
                                 textAlign = TextAlign.Center,
                                 fontWeight = FontWeight.Bold
                             )
@@ -1531,6 +1542,13 @@ fun CastlaScreen(
                                         modifier = Modifier.padding(top = 4.dp)
                                     )
                                 }
+                            } else if (cloudflareTunnelError != null) {
+                                Text(
+                                    text = cloudflareTunnelError!!,
+                                    fontSize = 14.sp,
+                                    color = Color(0xFFFF8A80),
+                                    textAlign = TextAlign.Center
+                                )
                             } else {
                                 Text(
                                     text = stringResource(id = R.string.status_tunnel_starting),

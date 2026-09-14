@@ -107,6 +107,10 @@ class MirrorForegroundService : Service() {
         private val _tunnelActiveFlow = MutableStateFlow(false)
         val tunnelActiveFlow: StateFlow<Boolean> = _tunnelActiveFlow
 
+        /** Error message if the cloudflare tunnel failed (cleared when restarting). */
+        private val _tunnelErrorFlow = MutableStateFlow<String?>(null)
+        val tunnelErrorFlow: StateFlow<String?> = _tunnelErrorFlow
+
 
         var isServiceRunning: Boolean
             get() = _serviceRunningFlow.value
@@ -904,6 +908,11 @@ class MirrorForegroundService : Service() {
                     _tunnelActiveFlow.value = tunnel.isRunning.value || starting
                 }
             }
+            serviceScope.launch {
+                tunnel.error.collect { err ->
+                    _tunnelErrorFlow.value = err
+                }
+            }
 
             tunnel.start(MirrorServer.DEFAULT_PORT)
             Log.i(TAG, "Cloudflare tunnel start requested")
@@ -921,6 +930,7 @@ class MirrorForegroundService : Service() {
         cloudflareTunnel = null
         _tunnelUrlFlow.value = null
         _tunnelActiveFlow.value = false
+        _tunnelErrorFlow.value = null
     }
 
     private fun startAbrLoop() {
