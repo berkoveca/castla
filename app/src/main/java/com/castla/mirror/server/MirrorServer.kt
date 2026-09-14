@@ -10,7 +10,6 @@ import com.castla.mirror.diagnostics.DiagnosticEvent
 import com.castla.mirror.diagnostics.DiagnosticSanitizer
 import com.castla.mirror.diagnostics.MirrorDiagnostics
 import com.castla.mirror.network.ReachableIp
-import com.castla.mirror.network.TunnelSecurity
 import com.castla.mirror.network.TunnelSecurityConfig
 import com.castla.mirror.ott.OttCatalog
 import com.castla.mirror.utils.AppCategoryClassifier
@@ -383,10 +382,10 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
 
 
     override fun openWebSocket(handshake: IHTTPSession): WebSocket {
-        val config = TunnelSecurity.load(context)
+        val config = TunnelSecurityConfig.load(context)
         if (config.authEnabled) {
             val cookieValue = parseCookie(handshake.headers["cookie"], COOKIE_AUTH)
-            if (!TunnelSecurity.isValidSession(context, config, cookieValue)) {
+            if (!TunnelSecurityConfig.isValidSession(context, config, cookieValue)) {
                 Log.i(TAG, "Rejecting WebSocket handshake: missing/invalid auth cookie")
                 throw NanoWSD.WebSocketException(
                     NanoWSD.WebSocketFrame.CloseCode.NormalClosure,
@@ -412,7 +411,7 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         var uri = session.uri
         if (uri == "/") uri = "/index.html"
 
-        val config = TunnelSecurity.load(context)
+        val config = TunnelSecurityConfig.load(context)
 
         // Password login — validate and issue the session cookie
         if (uri == "/auth") {
@@ -432,7 +431,7 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         // Auth gate — block every page until a valid session cookie is present
         if (config.authEnabled) {
             val cookieValue = parseCookie(session.headers["cookie"], COOKIE_AUTH)
-            if (!TunnelSecurity.isValidSession(context, config, cookieValue)) {
+            if (!TunnelSecurityConfig.isValidSession(context, config, cookieValue)) {
                 if (uri != "/login.html" && uri != "/favicon.ico") {
                     return serveLoginPage()
                 }
@@ -445,7 +444,7 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
     private fun handleAuthSubmit(session: IHTTPSession, config: TunnelSecurityConfig): Response {
         val submitted = session.parameters["password"]?.firstOrNull() ?: ""
         if (config.authPassword.isNotEmpty() && submitted == config.authPassword) {
-            val token = TunnelSecurity.sessionToken(context, config.authPassword)
+            val token = TunnelSecurityConfig.sessionToken(context, config.authPassword)
             Log.i(TAG, "Auth success from ${session.remoteIpAddress}")
             val resp = newFixedLengthResponse(
                 Response.Status.REDIRECT,

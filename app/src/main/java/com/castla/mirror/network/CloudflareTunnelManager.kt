@@ -78,7 +78,7 @@ class CloudflareTunnelManager(private val context: Context) {
             return
         }
 
-        val config = TunnelSecurity.load(context)
+        val config = TunnelSecurityConfig.load(context)
         _isStarting.value = true
         _error.value = null
 
@@ -88,7 +88,7 @@ class CloudflareTunnelManager(private val context: Context) {
                     Log.i(TAG, "Downloading cloudflared binary...")
                     downloadBinary()
                 }
-                if (TunnelSecurity.hasNamedTunnel(config)) {
+                if (TunnelSecurityConfig.hasNamedTunnel(config)) {
                     startNamedTunnelProcess(config.namedTunnelToken)
                 } else {
                     startQuickTunnelProcess(localPort)
@@ -206,7 +206,7 @@ class CloudflareTunnelManager(private val context: Context) {
         process = proc
 
         // Named tunnel hostname is known up front — surface it immediately.
-        _tunnelUrl.value = TunnelSecurity.load(context).namedTunnelUrl.ifBlank { null }
+        _tunnelUrl.value = TunnelSecurityConfig.load(context).namedTunnelUrl.ifBlank { null }
 
         var registered = false
         readerThread = Thread({

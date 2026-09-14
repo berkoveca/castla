@@ -110,7 +110,7 @@ class MainActivity : AppCompatActivity() {
     private var cloudflareTunnelUrl by mutableStateOf<String?>(null)
     private var cloudflareTunnelActive by mutableStateOf(false)
     private var tunnelAuthEnabled by mutableStateOf(
-        com.castla.mirror.network.TunnelSecurity.load(this).authEnabled
+        com.castla.mirror.network.TunnelSecurityConfig.load(this).authEnabled
     )
     private var teslaBleScanner: TeslaBleScanner? = null
 
@@ -356,7 +356,7 @@ class MainActivity : AppCompatActivity() {
                         },
                         onBackClick = {
                             tunnelAuthEnabled =
-                                com.castla.mirror.network.TunnelSecurity.load(this@MainActivity).authEnabled
+                                com.castla.mirror.network.TunnelSecurityConfig.load(this@MainActivity).authEnabled
                             showSettings = false
                         }
                     )

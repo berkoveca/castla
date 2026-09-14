@@ -46,7 +46,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.os.LocaleListCompat
-import com.castla.mirror.network.TunnelSecurity
 import com.castla.mirror.network.TunnelSecurityConfig
 
 @Composable
@@ -336,7 +335,7 @@ fun SettingsScreen(
                 fun update(block: (TunnelSecurityConfig) -> TunnelSecurityConfig) {
                     val updated = block(tunnelCfg)
                     tunnelCfg = updated
-                    TunnelSecurity.save(context, updated)
+                    TunnelSecurityConfig.save(context, updated)
                 }
 
                 SettingSection(title = stringResource(R.string.settings_remote_access_title)) {
