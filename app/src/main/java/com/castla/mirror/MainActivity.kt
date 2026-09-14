@@ -109,9 +109,7 @@ class MainActivity : AppCompatActivity() {
     private var isPanelOff by mutableStateOf(false)
     private var cloudflareTunnelUrl by mutableStateOf<String?>(null)
     private var cloudflareTunnelActive by mutableStateOf(false)
-    private var tunnelAuthEnabled by mutableStateOf(
-        com.castla.mirror.network.TunnelSecurityConfig.load(this).authEnabled
-    )
+    private var tunnelAuthEnabled by mutableStateOf(false)
     private var teslaBleScanner: TeslaBleScanner? = null
 
     // Shizuku download state
@@ -202,6 +200,7 @@ class MainActivity : AppCompatActivity() {
         networkMonitor = NetworkMonitor(this)
         networkMonitor.startMonitoring()
         streamSettings = StreamSettings.load(this)
+        tunnelAuthEnabled = com.castla.mirror.network.TunnelSecurityConfig.load(this).authEnabled
 
         shizukuInstalled = isShizukuInstalled()
         shizukuSetup = ShizukuSetup()
