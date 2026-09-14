@@ -10,10 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.io.BufferedReader
 import java.io.File
-import java.io.IOException
 import java.io.InputStreamReader
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * Manages Cloudflare tunnels exposing the local MirrorServer (port 9090).
@@ -24,17 +21,20 @@ import java.net.URL
  *  - Named tunnel: `cloudflared tunnel run <token>` → permanent hostname
  *    configured by the user in the Cloudflare Zero Trust dashboard.
  *
- * The binary is downloaded from Cloudflare's GitHub releases on first use and
- * cached in the app's files dir.
+ * The binary is shipped INSIDE the APK as `jniLibs/arm64-v8a/libcloudflared.so`
+ * and extracted by the package manager to `nativeLibraryDir` at install time.
+ * That directory is SELinux `exec_type` — the ONLY writable location Android
+ * 10+ permits `execve()` from (the app's own `filesDir` is `app_data_file`
+ * and is blocked by the W^X policy: "error=13, Permission denied").
  */
 class CloudflareTunnelManager(private val context: Context) {
 
     companion object {
         private const val TAG = "CloudflareTunnel"
-        private const val BINARY_NAME = "cloudflared"
-        private const val RELEASES_API = "https://api.github.com/repos/cloudflare/cloudflared/releases/latest"
-        private const val CONNECT_TIMEOUT_MS = 15_000
-        private const val READ_TIMEOUT_MS = 30_000
+        // Name the binary lands under once the CI job copies it into
+        // app/src/main/jniLibs/<abi>/ ; the package manager extracts any
+        // `jniLibs/<abi>/lib*.so` into nativeLibraryDir at install time.
+        private const val LIB_NAME = "libcloudflared.so"
         // Regex to match the trycloudflare URL from cloudflared stdout
         private val URL_PATTERN = Regex("""https://[a-zA-Z0-9\-]+\.trycloudflare\.com""")
     }
@@ -56,7 +56,8 @@ class CloudflareTunnelManager(private val context: Context) {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
 
-    private fun binaryFile(): File = File(context.filesDir, BINARY_NAME)
+    /** The extracted `libcloudflared.so` inside nativeLibraryDir (exec-able). */
+    private fun binaryFile(): File = File(context.applicationInfo.nativeLibraryDir, LIB_NAME)
 
     fun isBinaryDownloaded(): Boolean {
         val f = binaryFile()
@@ -71,7 +72,6 @@ class CloudflareTunnelManager(private val context: Context) {
      *    `*.trycloudflare.com` URL parsed from stdout.
      *  - Named tunnel: when a Zero Trust connector token is configured, runs
      *    `cloudflared tunnel run <token>` for a permanent configured hostname.
-     * Downloads the binary first if necessary.
      */
     fun start(localPort: Int = 9090) {
         if (_isRunning.value || _isStarting.value) {
@@ -85,15 +85,19 @@ class CloudflareTunnelManager(private val context: Context) {
 
         downloadJob = scope.launch {
             try {
+                // Clean up the binary a previous build downloaded to filesDir:
+                // it can never be executed under Android 10+ W^X anyway.
+                runCatching { File(context.filesDir, "cloudflared").delete() }
                 if (!isBinaryDownloaded()) {
-                    Log.i(TAG, "Downloading cloudflared binary...")
-                    downloadBinary()
+                    throw IllegalStateException(
+                        "cloudflared binary missing from nativeLibraryDir " +
+                            "(${binaryFile().absolutePath}). Reinstall the latest APK."
+                    )
                 }
-                ensureExecutable()
                 if (TunnelSecurityConfig.shouldUseNamedTunnel(config)) {
-                    runWithRepair { startNamedTunnelProcess(config.namedTunnelToken) }
+                    startNamedTunnelProcess(config.namedTunnelToken)
                 } else {
-                    runWithRepair { startQuickTunnelProcess(localPort) }
+                    startQuickTunnelProcess(localPort)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start tunnel", e)
@@ -101,35 +105,6 @@ class CloudflareTunnelManager(private val context: Context) {
                 _isStarting.value = false
             }
         }
-    }
-
-    /** Re-assert exec/read bits (owner + world) so install updates never leave a stale mode. */
-    private fun ensureExecutable() {
-        val f = binaryFile()
-        f.setExecutable(true, false)
-        f.setReadable(true, false)
-    }
-
-    /** If the cached binary cannot be executed (e.g. stale perms/label after a reinstall),
-     *  redownload a fresh copy and re-assert bits, then retry once. */
-    private fun runWithRepair(block: () -> Unit) {
-        try {
-            block()
-        } catch (e: IOException) {
-            Log.w(TAG, "Failed to run cloudflared (${e.message}) — re-downloading and retrying")
-            repairBinary()
-            block()
-        }
-    }
-
-    private fun repairBinary() {
-        try {
-            binaryFile().delete()
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not delete stale binary", e)
-        }
-        downloadBinary()
-        ensureExecutable()
     }
 
     fun stop() {
@@ -166,8 +141,6 @@ class CloudflareTunnelManager(private val context: Context) {
         Log.i(TAG, "Starting: ${cmd.joinToString(" ")}")
 
         val pb = ProcessBuilder(cmd)
-            .directory(context.filesDir)
-            .redirectErrorStream(true)
         // cloudflared is a static Go binary — on Android its default CA lookup
         // paths (/etc/ssl/certs/...) don't exist, so TLS verification against
         // api.trycloudflare.com fails with "certificate signed by unknown
@@ -230,8 +203,6 @@ class CloudflareTunnelManager(private val context: Context) {
         Log.i(TAG, "Starting NAMED tunnel: cloudflared tunnel run <redacted>")
 
         val pb = ProcessBuilder(cmd)
-            .directory(context.filesDir)
-            .redirectErrorStream(true)
         pb.environment()["SSL_CERT_DIR"] = "/system/etc/security/cacerts"
         pb.environment()["SSL_CERT_FILE"] = "/system/etc/security/cacerts/cacert.pem"
 
@@ -277,72 +248,5 @@ class CloudflareTunnelManager(private val context: Context) {
                 _isStarting.value = false
             }
         }, "cloudflared-reader").also { it.isDaemon = true; it.start() }
-    }
-
-    private fun downloadBinary() {
-        // Get latest release info from GitHub API
-        val releaseUrl = URL(RELEASES_API)
-        val conn = releaseUrl.openConnection() as HttpURLConnection
-        conn.connectTimeout = CONNECT_TIMEOUT_MS
-        conn.readTimeout = READ_TIMEOUT_MS
-        conn.setRequestProperty("Accept", "application/vnd.github.v3+json")
-        conn.setRequestProperty("User-Agent", "Castla/${context.packageName}")
-
-        try {
-            if (conn.responseCode != 200) {
-                throw RuntimeException("GitHub API returned ${conn.responseCode}")
-            }
-
-            val json = conn.inputStream.bufferedReader().readText()
-            // Parse download URL for android-arm64
-            val downloadUrl = parseDownloadUrl(json)
-                ?: throw RuntimeException("Could not find cloudflared binary for arm64 in latest release")
-
-            Log.i(TAG, "Downloading from: $downloadUrl")
-            downloadFile(downloadUrl, binaryFile())
-            ensureExecutable()
-            Log.i(TAG, "Binary downloaded and made executable")
-        } finally {
-            conn.disconnect()
-        }
-    }
-
-    private fun parseDownloadUrl(json: String): String? {
-        // Simple JSON parsing without external library
-        // Look for "browser_download_url" entries containing "cloudflared-linux-arm64"
-        val pattern = """"browser_download_url"\s*:\s*"([^"]*cloudflared-linux-arm64[^"]*)"""".toRegex()
-        return pattern.find(json)?.groupValues?.get(1)
-    }
-
-    private fun downloadFile(urlStr: String, dest: File) {
-        val url = URL(urlStr)
-        val conn = url.openConnection() as HttpURLConnection
-        conn.connectTimeout = CONNECT_TIMEOUT_MS
-        conn.readTimeout = READ_TIMEOUT_MS
-
-        try {
-            if (conn.responseCode != 200) {
-                throw RuntimeException("Download returned ${conn.responseCode}")
-            }
-
-            val total = conn.contentLength.toLong()
-            conn.inputStream.use { input ->
-                dest.outputStream().use { output ->
-                    val buffer = ByteArray(8192)
-                    var downloaded = 0L
-                    var read: Int
-                    while (input.read(buffer).also { read = it } != -1) {
-                        output.write(buffer, 0, read)
-                        downloaded += read
-                        if (total > 0) {
-                            val pct = (downloaded * 100 / total).toInt()
-                            if (pct % 10 == 0) Log.d(TAG, "Download: $pct%")
-                        }
-                    }
-                }
-            }
-        } finally {
-            conn.disconnect()
-        }
     }
 }

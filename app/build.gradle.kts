@@ -91,6 +91,14 @@ android {
         checkReleaseBuilds = false
     }
 
+    packaging {
+        jniLibs {
+            // Force native libs (incl. the bundled cloudflared binary) to be
+            // extracted to nativeLibraryDir on disk so they can be exec'ed.
+            useLegacyPackaging = true
+        }
+    }
+
     buildFeatures {
         compose = true
         aidl = true

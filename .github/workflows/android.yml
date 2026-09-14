@@ -23,6 +23,15 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Bundle cloudflared binary
+        run: |
+          set -e
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+          curl -fsSL -o app/src/main/jniLibs/arm64-v8a/libcloudflared.so \
+            "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"
+          chmod +x app/src/main/jniLibs/arm64-v8a/libcloudflared.so
+          ls -la app/src/main/jniLibs/arm64-v8a/
+
       - name: Build APK
         run: |
           chmod +x gradlew
