@@ -48,10 +48,14 @@ class ScreenCaptureManager(private val context: Context) {
         mediaProjection = projectionManager.getMediaProjection(resultCode, data)
         mediaProjection?.registerCallback(projectionCallback, null)
 
-        // Get display metrics for capture resolution
+        // Get display metrics for capture resolution — cap preserving aspect ratio
+        // so e.g. a 3200x1440 (20:9) screen becomes 1920x864, not a distorted 1920x1200.
         val metrics = context.resources.displayMetrics
-        captureWidth = metrics.widthPixels.coerceAtMost(1920)
-        captureHeight = metrics.heightPixels.coerceAtMost(1200)
+        val capped = com.castla.mirror.utils.StreamMath.capResolutionPreservingAspect(
+            metrics.widthPixels, metrics.heightPixels, 1920, 1200
+        )
+        captureWidth = capped.first
+        captureHeight = capped.second
         captureDpi = metrics.densityDpi
 
         Log.i(TAG, "Projection initialized: ${captureWidth}x${captureHeight} @ ${captureDpi}dpi")

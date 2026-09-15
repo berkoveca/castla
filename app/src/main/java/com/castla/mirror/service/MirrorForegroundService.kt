@@ -1119,6 +1119,16 @@ class MirrorForegroundService : Service() {
                 width = (width * scale).toInt()
             }
 
+            if (currentCodecMode == "mjpeg") {
+                val capped = com.castla.mirror.utils.StreamMath.capToDecodeBudget(
+                    width,
+                    height,
+                    com.castla.mirror.utils.StreamMath.mjpegBudgetFor(isCurrentAppVideo)
+                )
+                width = capped.first
+                height = capped.second
+            }
+
             width = (width + 15) and 15.inv()
             height = (height + 15) and 15.inv()
 
@@ -1453,7 +1463,12 @@ class MirrorForegroundService : Service() {
         mirrorServer?.setKeyframeRequester("secondary") {}
 
         val surface = if (currentCodecMode == "mjpeg") {
-            val jpeg = JpegEncoder(width, height, fps = 15, quality = 65)
+            val jpeg = JpegEncoder(
+                width,
+                height,
+                fps = com.castla.mirror.utils.StreamMath.mjpegFpsForTier(currentFps),
+                quality = com.castla.mirror.utils.StreamMath.MJPEG_QUALITY
+            )
             val inputSurface = jpeg.createInputSurface()
             jpeg.start { frameData, isKeyFrame -> mirrorServer?.broadcastFrame(frameData, isKeyFrame, "secondary") }
             secondaryJpegEncoder = jpeg
@@ -3295,6 +3310,18 @@ class MirrorForegroundService : Service() {
             cappedWidth = (cappedWidth * scale).toInt()
         }
 
+        // MJPEG decode ceiling (Tesla MCU2): cap pixels so the browser can keep up.
+        // OTT/video gets the wider budget (~1920x864), everything else stays smooth (~1600x720).
+        if (currentCodecMode == "mjpeg") {
+            val capped = com.castla.mirror.utils.StreamMath.capToDecodeBudget(
+                cappedWidth,
+                cappedHeight,
+                com.castla.mirror.utils.StreamMath.mjpegBudgetFor(isCurrentAppVideo)
+            )
+            cappedWidth = capped.first
+            cappedHeight = capped.second
+        }
+
         val alignedWidth = (cappedWidth + 15) and 15.inv()
         val alignedHeight = (cappedHeight + 15) and 15.inv()
 
@@ -3328,7 +3355,12 @@ class MirrorForegroundService : Service() {
                 jpegEncoder?.release()
                 jpegEncoder = null
 
-                val jpeg = JpegEncoder(width, height, fps = 15, quality = 65)
+                val jpeg = JpegEncoder(
+                    width,
+                    height,
+                    fps = com.castla.mirror.utils.StreamMath.mjpegFpsForTier(currentFps),
+                    quality = com.castla.mirror.utils.StreamMath.MJPEG_QUALITY
+                )
                 val jpegSurface = jpeg.createInputSurface()
                 currentEncoderSurface = jpegSurface
                 jpeg.start { frameData, isKeyFrame -> mirrorServer?.broadcastFrame(frameData, isKeyFrame) }

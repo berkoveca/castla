@@ -239,4 +239,95 @@ class StreamMathTest {
         // But still reasonable quality
         assertTrue(videoBitrate + companionBitrate > 1_500_000)
     }
+
+    // ── Aspect-preserving capture cap ──
+
+    @Test
+    fun `capResolutionPreservingAspect fits S20 Ultra landscape 20-9 into 1920x1200`() {
+        // 3200x1440 (20:9) capped to 1920 wide → 1920x864, aspect preserved
+        val (w, h) = StreamMath.capResolutionPreservingAspect(3200, 1440, 1920, 1200)
+        assertEquals(1920, w)
+        assertEquals(864, h)
+        // Aspect ratio unchanged
+        assertEquals(3200.0 / 1440, w.toDouble() / h, 0.01)
+    }
+
+    @Test
+    fun `capResolutionPreservingAspect fits portrait tall screen into 1920x1200`() {
+        // 1440x3200 capped to 1200 tall → 540x1200, aspect preserved
+        val (w, h) = StreamMath.capResolutionPreservingAspect(1440, 3200, 1920, 1200)
+        assertEquals(540, w)
+        assertEquals(1200, h)
+        assertEquals(1440.0 / 3200, w.toDouble() / h, 0.01)
+    }
+
+    @Test
+    fun `capResolutionPreservingAspect never upscales`() {
+        // 800x600 already fits → unchanged
+        val (w, h) = StreamMath.capResolutionPreservingAspect(800, 600, 1920, 1200)
+        assertEquals(800, w)
+        assertEquals(600, h)
+    }
+
+    @Test
+    fun `capResolutionPreservingAspect matches exact cap`() {
+        val (w, h) = StreamMath.capResolutionPreservingAspect(1920, 1200, 1920, 1200)
+        assertEquals(1920, w)
+        assertEquals(1200, h)
+    }
+
+    // ── MJPEG decode budget ceiling ──
+
+    @Test
+    fun `capToDecodeBudget smooth keeps within 1_2MP and preserves aspect`() {
+        // S20 Ultra landscape capture 1920x864 exceeds smooth budget → scaled down
+        val (w, h) = StreamMath.capToDecodeBudget(1920, 864, StreamMath.MJPEG_SMOOTH_BUDGET_PIXELS)
+        val pixels = w.toLong() * h
+        assertTrue(pixels <= StreamMath.MJPEG_SMOOTH_BUDGET_PIXELS)
+        assertTrue(pixels > StreamMath.MJPEG_SMOOTH_BUDGET_PIXELS / 2)
+        // Aspect 16:9-ish (0.45) preserved within tolerance
+        assertEquals(1920.0 / 864, w.toDouble() / h, 0.02)
+        // ~1600x720-class result
+        assertTrue(w in 1500..1700)
+        assertTrue(h in 680..760)
+    }
+
+    @Test
+    fun `capToDecodeBudget video budget fits full 1920x864`() {
+        val (w, h) = StreamMath.capToDecodeBudget(1920, 864, StreamMath.MJPEG_VIDEO_BUDGET_PIXELS)
+        assertEquals(1920, w)
+        assertEquals(864, h)
+    }
+
+    @Test
+    fun `capToDecodeBudget leaves small resolutions unchanged`() {
+        val (w, h) = StreamMath.capToDecodeBudget(1280, 720, StreamMath.MJPEG_SMOOTH_BUDGET_PIXELS)
+        assertEquals(1280, w)
+        assertEquals(720, h)
+    }
+
+    @Test
+    fun `capToDecodeBudget clamps width to 1920 first`() {
+        // 4000x1000 → width-clamped to 1920x480 (0.92MP, under smooth budget)
+        val (w, h) = StreamMath.capToDecodeBudget(4000, 1000, StreamMath.MJPEG_SMOOTH_BUDGET_PIXELS)
+        assertEquals(1920, w)
+        assertEquals(480, h)
+        assertEquals(4000.0 / 1000, w.toDouble() / h, 0.01)
+    }
+
+    @Test
+    fun `mjpegBudgetFor reflects video vs smooth`() {
+        assertEquals(StreamMath.MJPEG_SMOOTH_BUDGET_PIXELS, StreamMath.mjpegBudgetFor(false))
+        assertEquals(StreamMath.MJPEG_VIDEO_BUDGET_PIXELS, StreamMath.mjpegBudgetFor(true))
+    }
+
+    @Test
+    fun `mjpegFpsForTier caps at MCU2 decode ceiling`() {
+        assertEquals(20, StreamMath.mjpegFpsForTier(30))
+        assertEquals(20, StreamMath.mjpegFpsForTier(60))
+        assertEquals(15, StreamMath.mjpegFpsForTier(15))
+        assertEquals(10, StreamMath.mjpegFpsForTier(10))
+        // Never zero for a bad tier value
+        assertEquals(1, StreamMath.mjpegFpsForTier(0))
+    }
 }

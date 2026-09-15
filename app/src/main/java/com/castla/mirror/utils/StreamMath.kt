@@ -1,6 +1,58 @@
 package com.castla.mirror.utils
 
+import kotlin.math.sqrt
+
 object StreamMath {
+    /** Hard ceiling on encoded stream width (matches Tesla 1920×1200 display). */
+    const val MJPEG_MAX_WIDTH = 1920
+    /** Decode budget for smooth MJPEG (~1600×720) — matches MCU2's ~1.2 MP sweet spot. */
+    const val MJPEG_SMOOTH_BUDGET_PIXELS = 1_200_000L
+    /** Decode budget for OTT/video MJPEG (~1920×864, full display width on MCU2). */
+    const val MJPEG_VIDEO_BUDGET_PIXELS = 1_660_000L
+    /** JPEG encode quality for MJPEG streams (75: crisp text, modest bytes). */
+    const val MJPEG_QUALITY = 75
+    /** Encode FPS ceiling for MJPEG — MCU2 decode is the bottleneck, not the encoder. */
+    const val MJPEG_MAX_FPS = 20
+
+    /**
+     * Squares a resolution down (never up) preserving the aspect ratio,
+     * so both dimensions fit within the given caps.
+     */
+    fun capResolutionPreservingAspect(width: Int, height: Int, maxWidth: Int, maxHeight: Int): Pair<Int, Int> {
+        require(width > 0 && height > 0)
+        val scale = minOf(1.0, maxWidth.toDouble() / width, maxHeight.toDouble() / height)
+        return (width * scale).toInt() to (height * scale).toInt()
+    }
+
+    /**
+     * Caps a resolution to a decode pixel budget while preserving aspect ratio.
+     * Used by the MJPEG path (e.g. Tesla MCU2) where client-side JPEG decode
+     * cost dominates — encode at what the browser can actually consume.
+     */
+    fun capToDecodeBudget(width: Int, height: Int, maxPixels: Long, maxWidth: Int = MJPEG_MAX_WIDTH): Pair<Int, Int> {
+        require(width > 0 && height > 0 && maxPixels > 0)
+        var w = width.toDouble()
+        var h = height.toDouble()
+        if (w > maxWidth) {
+            val s = maxWidth.toDouble() / w
+            w *= s
+            h *= s
+        }
+        if (w * h > maxPixels) {
+            val s = sqrt(maxPixels.toDouble() / (w * h))
+            w *= s
+            h *= s
+        }
+        return w.toInt() to h.toInt()
+    }
+
+    /** Decode budget for MJPEG depending on whether OTT video is playing. */
+    fun mjpegBudgetFor(isVideoApp: Boolean): Long =
+        if (isVideoApp) MJPEG_VIDEO_BUDGET_PIXELS else MJPEG_SMOOTH_BUDGET_PIXELS
+
+    /** MJPEG encode FPS derived from a tier FPS, capped at the MCU2 decode ceiling. */
+    fun mjpegFpsForTier(tierFps: Int): Int = tierFps.coerceIn(1, MJPEG_MAX_FPS)
+
     /**
      * Minimum H.264 level (as MediaCodecInfo.CodecProfileLevel.AVCLevel*)
      * whose per-frame macroblock limit supports the given resolution.
