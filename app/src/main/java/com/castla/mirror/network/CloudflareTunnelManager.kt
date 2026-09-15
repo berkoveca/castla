@@ -42,8 +42,12 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         // Give cloudflared up to this long to report a tunnel; after that the UI
         // sees a timeout error instead of an indefinite "Starting…" state.
         private const val START_TIMEOUT_MS = 60_000L
-        private const val MAX_RESTART_RETRIES = 5
+        // Auto-restart after a mid-session drop keeps retrying (capped backoff)
+        // instead of giving up: a dropped tunnel is normal on mobile networks, and
+        // the only legitimate stop is an explicit stop(). This avoids the "tunnel
+        // died and never came back" failure.
         private const val RESTART_BASE_DELAY_MS = 3_000L
+        private const val MAX_RESTART_BACKOFF_MS = 30_000L
         // Bounded retries for an INITIAL start that fails before ever registering
         // (transient DNS/network blip). Auto-restart (below) covers drops AFTER a
         // tunnel registered; this covers never-connecting cases so a one-off
@@ -114,6 +118,10 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
      */
     fun start(localPort: Int = 9090) {
         val config = TunnelSecurityConfig.load(context)
+        val useNamed = TunnelSecurityConfig.shouldUseNamedTunnel(config)
+        Log.i(TAG, "Tunnel mode=${if (useNamed) "NAMED(stable)" else "QUICK(temporal)"} " +
+            "tokenPresent=${config.namedTunnelToken.isNotBlank()} " +
+            "urlConfigured=${config.namedTunnelUrl.isNotBlank()} enabled=${config.namedTunnelEnabled}")
         lifecycleLock.lock()
         try {
             if (_isRunning.value || _isStarting.value) {
@@ -137,8 +145,16 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
             kotlinx.coroutines.delay(START_TIMEOUT_MS)
             if (_isStarting.value && !_isRunning.value) {
                 Log.w(TAG, "Tunnel start timed out after ${START_TIMEOUT_MS}ms")
-                _isStarting.value = false
-                scheduleInitialStartRetry("cloudflared did not report a tunnel within ${START_TIMEOUT_MS / 1000}s")
+                if (restartCount == 0 && !registered) {
+                    // Genuine FIRST-start failure (binary missing / network / token):
+                    // surface it once via the initial-start retry path.
+                    _isStarting.value = false
+                    scheduleInitialStartRetry("cloudflared did not report a tunnel within ${START_TIMEOUT_MS / 1000}s")
+                } else {
+                    // A drop is already being recovered by auto-restart — don't let
+                    // this watchdog give up and permanently kill an active session.
+                    Log.w(TAG, "Tunnel still (re)starting after timeout - leaving auto-restart to recover")
+                }
             }
         }
 
@@ -410,14 +426,12 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
      */
     private fun scheduleAutoRestart(reason: String) {
         if (intentionalStop) return
-        if (restartCount >= MAX_RESTART_RETRIES) {
-            Log.w(TAG, "Giving up after ${MAX_RESTART_RETRIES} restart attempts: $reason")
-            _error.value = "Tunnel connection kept dropping ($reason). Please restart mirroring."
-            return
-        }
         restartCount++
-        val delay = RESTART_BASE_DELAY_MS * restartCount
-        Log.w(TAG, "Tunnel dropped ($reason) — restart $restartCount in ${delay}ms")
+        // Never give up while the session is active: cap the backoff (don't let it
+        // grow unbounded) and keep retrying. A dropped tunnel is expected on mobile
+        // networks — the only thing that should stop retries is an explicit stop().
+        val delay = (RESTART_BASE_DELAY_MS * restartCount).coerceAtMost(MAX_RESTART_BACKOFF_MS)
+        Log.w(TAG, "Tunnel dropped ($reason) — auto-restart $restartCount in ${delay}ms (keeps retrying)")
         restartJob?.cancel()
         restartJob = scope.launch {
             kotlinx.coroutines.delay(delay)
