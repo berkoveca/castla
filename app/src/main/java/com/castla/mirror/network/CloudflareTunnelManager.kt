@@ -66,6 +66,12 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + Job())
+    // Serializes start/stop/restart and Process ownership so a stop() (typically
+    // invoked from a background coroutine, e.g. the idle-timeout watchdog) can
+    // never race with start()/auto-restart and destroy the wrong Process or
+    // corrupt tunnel state — which previously closed the cloudflared session from
+    // a thread other than the one that started it.
+    private val lifecycleLock = java.util.concurrent.locks.ReentrantLock()
     private var process: Process? = null
     private var readerThread: Thread? = null
     private var downloadJob: Job? = null
@@ -107,18 +113,23 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
      *    `cloudflared tunnel run <token>` for a permanent configured hostname.
      */
     fun start(localPort: Int = 9090) {
-        if (_isRunning.value || _isStarting.value) {
-            Log.i(TAG, "Tunnel already running/starting — reusing existing tunnel")
-            return
-        }
+        lifecycleLock.lock()
+        try {
+            if (_isRunning.value || _isStarting.value) {
+                Log.i(TAG, "Tunnel already running/starting — reusing existing tunnel")
+                return
+            }
 
-        val config = TunnelSecurityConfig.load(context)
-        intentionalStop = false
-        lastLocalPort = localPort
-        restartJob?.cancel()
-        registered = false
-        _isStarting.value = true
-        _error.value = null
+            val config = TunnelSecurityConfig.load(context)
+            intentionalStop = false
+            lastLocalPort = localPort
+            restartJob?.cancel()
+            registered = false
+            _isStarting.value = true
+            _error.value = null
+        } finally {
+            lifecycleLock.unlock()
+        }
 
         // Safety net: never leave the UI on "Starting tunnel…" forever.
         startTimeoutJob?.cancel()
@@ -132,7 +143,13 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         }
 
         downloadJob = scope.launch {
+            lifecycleLock.lock()
             try {
+                if (intentionalStop) {
+                    Log.i(TAG, "Tunnel start aborted — stop requested during startup")
+                    _isStarting.value = false
+                    return@launch
+                }
                 // Clean up the binary a previous build downloaded to filesDir:
                 // it can never be executed under Android 10+ W^X anyway.
                 runCatching { File(context.filesDir, "cloudflared").delete() }
@@ -151,31 +168,38 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                 Log.e(TAG, "Failed to start tunnel", e)
                 _error.value = e.message ?: "Unknown error"
                 _isStarting.value = false
+            } finally {
+                lifecycleLock.unlock()
             }
         }
     }
 
     fun stop() {
-        Log.i(TAG, "Stopping tunnel")
-        intentionalStop = true
-        restartJob?.cancel()
-        downloadJob?.cancel()
-        startTimeoutJob?.cancel()
-        registered = false
-        initialStartRetries = 0
-        readerThread?.interrupt()
-        readerThread = null
-
+        lifecycleLock.lock()
         try {
-            process?.destroy()
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to destroy process", e)
+            Log.i(TAG, "Stopping tunnel")
+            intentionalStop = true
+            restartJob?.cancel()
+            downloadJob?.cancel()
+            startTimeoutJob?.cancel()
+            registered = false
+            initialStartRetries = 0
+            readerThread?.interrupt()
+            readerThread = null
+
+            try {
+                process?.destroy()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to destroy process", e)
+            }
+            process = null
+            _tunnelUrl.value = null
+            _isRunning.value = false
+            _isStarting.value = false
+            _error.value = null
+        } finally {
+            lifecycleLock.unlock()
         }
-        process = null
-        _tunnelUrl.value = null
-        _isRunning.value = false
-        _isStarting.value = false
-        _error.value = null
     }
 
     /**
@@ -323,7 +347,15 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                 Log.d(TAG, "Reader thread interrupted")
             } catch (e: Exception) {
                 Log.e(TAG, "Error reading cloudflared output", e)
-                _error.value = e.message
+                if (!intentionalStop) {
+                    if (_isRunning.value) {
+                        _tunnelUrl.value = null
+                        _isRunning.value = false
+                        scheduleAutoRestart("reader error: ${e.message}")
+                    } else {
+                        scheduleInitialStartRetry("reader error before tunnel established: ${e.message}")
+                    }
+                }
                 _isStarting.value = false
             }
         }, "cloudflared-reader").also { it.isDaemon = true; it.start() }
@@ -433,7 +465,15 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                 Log.d(TAG, "Reader thread interrupted")
             } catch (e: Exception) {
                 Log.e(TAG, "Error reading cloudflared output", e)
-                _error.value = e.message
+                if (!intentionalStop) {
+                    if (_isRunning.value) {
+                        _tunnelUrl.value = null
+                        _isRunning.value = false
+                        scheduleAutoRestart("reader error: ${e.message}")
+                    } else {
+                        scheduleInitialStartRetry("reader error before tunnel established: ${e.message}")
+                    }
+                }
                 _isStarting.value = false
             }
         }, "cloudflared-reader").also { it.isDaemon = true; it.start() }
