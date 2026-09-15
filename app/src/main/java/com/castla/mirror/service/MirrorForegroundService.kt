@@ -2887,22 +2887,23 @@ class MirrorForegroundService : Service() {
                 vdm.createVirtualDisplay(actualWidth, actualHeight, actualDpi, actualSurface)
 
                 if (vdm.hasVirtualDisplay()) {
-                touchInjector?.setVirtualDisplayInjector { action, x, y, pointerId ->
-                    vdm.injectInput(action, x, y, pointerId)
+                    touchInjector?.setVirtualDisplayInjector { action, x, y, pointerId ->
+                        vdm.injectInput(action, x, y, pointerId)
+                    }
+                    // Harden Shizuku (fortify + install watchdog if needed) for WiFi-off survival
+                    serviceScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        val ok = setup.ensureShizukuHardened()
+                        Log.i(TAG, "ensureShizukuHardened (service): $ok")
+                    }
+                    safeResult(true)
+                } else {
+                    safeResult(false)
                 }
-                // Harden Shizuku (fortify + install watchdog if needed) for WiFi-off survival
-                serviceScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                    val ok = setup.ensureShizukuHardened()
-                    Log.i(TAG, "ensureShizukuHardened (service): $ok")
-                }
-                safeResult(true)
-            } else {
+            } catch (e: Exception) {
+                Log.e(TAG, "trySetupVirtualDisplay: VD setup threw", e)
+                FileLogger.e(TAG, "trySetupVirtualDisplay VD setup failed", e)
                 safeResult(false)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "trySetupVirtualDisplay: VD setup threw", e)
-            FileLogger.e(TAG, "trySetupVirtualDisplay VD setup failed", e)
-            safeResult(false)
         }
     }
 
