@@ -54,6 +54,10 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug
 
+      - name: Run unit tests
+        run: |
+          ./gradlew :app:testDebugUnitTest
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
