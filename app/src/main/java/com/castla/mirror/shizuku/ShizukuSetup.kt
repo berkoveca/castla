@@ -848,7 +848,9 @@ class ShizukuSetup {
             "appops_run_any" to "cmd appops set $SHIZUKU_PACKAGE RUN_ANY_IN_BACKGROUND allow",
             "appops_run_bg"  to "cmd appops set $SHIZUKU_PACKAGE RUN_IN_BACKGROUND allow",
             "oom_adj_server" to "for PID in \$(pidof shizuku_server 2>/dev/null); do " +
-                                "echo -900 > /proc/\$PID/oom_score_adj 2>/dev/null; done; echo ok"
+                                "echo -100 > /proc/\$PID/oom_score_adj 2>/dev/null; " +
+                                "log -t castla_shizuku \"fortify: shizuku_server oom_score_adj=-100 pid=\$PID\"; done; " +
+                                "echo ok"
         )
         val script = ShellDiag.buildScript(steps)
         val out = try {
@@ -1047,20 +1049,37 @@ APK_PATH="$shizukuApk"
 LIB_DIR="$libDir"
 export LD_LIBRARY_PATH="${'$'}LIB_DIR"
 echo ${'$'}${'$'} > $INNER_PID_FILE
-# Best-effort: keep our own OOM score low too
-echo -900 > /proc/${'$'}${'$'}/oom_score_adj 2>/dev/null
+# Best-effort: keep our own OOM score modestly low (NOT unkillable — see note below)
+echo -100 > /proc/${'$'}${'$'}/oom_score_adj 2>/dev/null
 
 while true; do
     date +%s > $HEARTBEAT_FILE 2>/dev/null
     if ! pidof shizuku_server > /dev/null 2>&1; then
-        log -t shizuku_watchdog "server down, restarting"
+        # Respawn cooldown: never restart shizuku_server more than once per
+        # RESPAWN_MIN_GAP seconds. A tight restart loop kills the user-service
+        # (which hosts PrivilegedService), which makes the app rebind + recreate
+        # its virtual display repeatedly — that VD thrash can crash surfaceflinger
+        # / system_server and reboot the phone. Pacing the restart avoids it.
+        NOW_TS=${'$'}(date +%s)
+        LAST=${'$'}(cat /data/local/tmp/shizuku_watchdog_spawnguard 2>/dev/null)
+        if [ -n "${'$'}LAST" ] && [ ${'$'}((NOW_TS - LAST)) -lt 30 ]; then
+            log -t shizuku_watchdog "server missing but within respawn cooldown, skipping"
+            sleep 5
+            continue
+        fi
+        echo ${'$'}NOW_TS > /data/local/tmp/shizuku_watchdog_spawnguard
+        log -t shizuku_watchdog "server down, restarting (cooldown ok)"
         setsid nohup app_process -Djava.class.path="${'$'}APK_PATH" /system/bin \
             --nice-name=shizuku_server rikka.shizuku.server.ShizukuService \
             </dev/null >/dev/null 2>&1 &
         sleep 3
         for PID in ${'$'}(pidof shizuku_server 2>/dev/null); do
-            echo -900 > /proc/${'$'}PID/oom_score_adj 2>/dev/null
+            # -100 keeps it favored but KILLABLE under memory pressure. Writing
+            # -900 (fully unkillable) pinned RAM the lowmemorykiller could never
+            # reclaim, which can force a kernel OOM panic -> phone reboot.
+            echo -100 > /proc/${'$'}PID/oom_score_adj 2>/dev/null
         done
+        log -t shizuku_watchdog "restarted shizuku_server (oom_score_adj=-100)"
         sleep 12
     fi
     sleep 5
