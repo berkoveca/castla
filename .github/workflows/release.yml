@@ -118,7 +118,13 @@ jobs:
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        run: |
+          # ubuntu-latest ships a preinstalled Android SDK; android-actions/setup-android
+          # is broken (still installs the removed legacy "tools" package), so expose
+          # the preinstalled SDK to gradle/adb instead.
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          echo "Using Android SDK at $ANDROID_HOME"
 
       - name: Bundle cloudflared binary
         run: |
