@@ -11,6 +11,10 @@ import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Surface
 
+// DisplayManager.VIRTUAL_DISPLAY_FLAG_DESTROY_CONTENT_ON_REMOVAL (1 shl 8, API 24) is not
+// resolvable against this project's SDK stubs, so use the raw value (matches PrivilegedService).
+private const val FLAG_DESTROY_CONTENT_ON_REMOVAL = 1 shl 8
+
 class ScreenCaptureManager(private val context: Context) {
 
     companion object {
@@ -73,7 +77,7 @@ class ScreenCaptureManager(private val context: Context) {
             height,
             captureDpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR or
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_DESTROY_CONTENT_ON_REMOVAL,
+                FLAG_DESTROY_CONTENT_ON_REMOVAL,
             surface,
             null,
             null
