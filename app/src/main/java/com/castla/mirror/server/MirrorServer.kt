@@ -413,36 +413,57 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
 
         val config = TunnelSecurityConfig.load(context)
 
-        // Password login — validate and issue the session cookie
-        if (uri == "/auth") {
-            return handleAuthSubmit(session, config)
+        // NanoHTTPD only consumes the POST body for application/x-www-form-urlencoded
+        // and multipart content types. Any other body (e.g. text/plain from a
+        // stripped-down client, or a proxy reformatting the form) leaves its bytes
+        // in the socket, which NanoHTTPD later reads as the first line of the NEXT
+        // request — the "HTTP verb password=testPOST unhandled" symptom. Drain the
+        // body for ordinary requests so the stream is always clean. /auth parses it
+        // itself (it needs the value), so it is exempt here.
+        if (uri != "/auth") {
+            drainRequestBody(session)
         }
 
-        // API routes bypass the auth gate (no sensitive data; used pre-login too)
-        if (uri == "/api/apps") {
-            return serveAppList()
-        } else if (uri.startsWith("/api/icon")) {
-            val pkg = session.parameters["pkg"]?.firstOrNull()
-            if (pkg != null) {
-                return serveAppIcon(pkg)
+        val response = when {
+            // Password login — validate and issue the session cookie
+            uri == "/auth" -> handleAuthSubmit(session, config)
+
+            // API routes bypass the auth gate (no sensitive data; used pre-login too)
+            uri == "/api/apps" -> serveAppList()
+            uri.startsWith("/api/icon") -> {
+                val pkg = session.parameters["pkg"]?.firstOrNull()
+                if (pkg != null) serveAppIcon(pkg) else serveAsset(uri)
             }
-        }
 
-        // Auth gate — block every page until a valid session cookie is present
-        if (config.authEnabled) {
-            val cookieValue = parseCookie(session.headers["cookie"], COOKIE_AUTH)
-            if (!TunnelSecurityConfig.isValidSession(context, config, cookieValue)) {
-                if (uri != "/login.html" && uri != "/favicon.ico") {
-                    return serveLoginPage()
+            // Auth gate — block every page until a valid session cookie is present
+            config.authEnabled -> {
+                val cookieValue = parseCookie(session.headers["cookie"], COOKIE_AUTH)
+                if (!TunnelSecurityConfig.isValidSession(context, config, cookieValue)) {
+                    if (uri != "/login.html" && uri != "/favicon.ico") serveLoginPage() else serveAsset(uri)
+                } else {
+                    serveAsset(uri)
                 }
             }
+            else -> serveAsset(uri)
         }
+        // Discourage keep-alive reuse so residual bytes can never corrupt a
+        // follow-up request on the same connection.
+        response.addHeader("Connection", "close")
+        return response
+    }
 
-        return serveAsset(uri)
+    /** Reads and discards the request body so it cannot leak into the next request. */
+    private fun drainRequestBody(session: IHTTPSession) {
+        if (session.method == NanoHTTPD.Method.GET || session.method == NanoHTTPD.Method.HEAD) return
+        try {
+            session.parseBody(linkedMapOf())
+        } catch (e: Exception) {
+            Log.d(TAG, "No request body to drain: ${e.message}")
+        }
     }
 
     private fun handleAuthSubmit(session: IHTTPSession, config: TunnelSecurityConfig): Response {
-        val submitted = session.parameters["password"]?.firstOrNull() ?: ""
+        val submitted = extractPassword(session)
         if (config.authPassword.isNotEmpty() && submitted == config.authPassword) {
             val token = TunnelSecurityConfig.sessionToken(context, config.authPassword)
             Log.i(TAG, "Auth success from ${session.remoteIpAddress}")
@@ -460,6 +481,46 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         Log.w(TAG, "Auth failed from ${session.remoteIpAddress}")
         return serveLoginPage(showError = true)
     }
+
+    /**
+     * Reads the password from the form POST regardless of content type. NanoHTTPD
+     * only decodes application/x-www-form-urlencoded into session parameters, so
+     * we additionally parse the raw body ourselves (which also drains the socket).
+     */
+    private fun extractPassword(session: IHTTPSession): String {
+        val contentType = session.headers["content-type"].orEmpty().lowercase()
+        if (contentType.isNotEmpty() && !contentType.startsWith("application/x-www-form-urlencoded")) {
+            Log.d(TAG, "Auth submit with non-form content type: $contentType")
+        }
+
+        // Query-string params (fallback for GET-style submits).
+        session.parameters["password"]?.firstOrNull()?.let { return it }
+
+        // Form body: NanoHTTPD decodes urlencoded here; raw body keys are read
+        // below to also cover text/plain and other encodings.
+        val parsed = linkedMapOf<String, String>()
+        try {
+            session.parseBody(parsed)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse auth body: ${e.message}")
+        }
+        parsed["password"]?.let { return it }
+
+        val raw = parsed[NanoHTTPD.Params.POST_DATA] ?: parsed[NanoHTTPD.Params.PRE_POST_DATA]
+        val form = raw.orEmpty()
+            .split("&")
+            .mapNotNull { pair ->
+                val kv = pair.split("=", limit = 2)
+                if (kv.size != 2) return@mapNotNull null
+                val key = percentDecode(kv[0])
+                if (key == "password") percentDecode(kv[1]) else null
+            }
+            .firstOrNull()
+        return form.orEmpty()
+    }
+
+    private fun percentDecode(input: String): String =
+        try { NanoHTTPD.decodePercent(input.trim()) } catch (e: Exception) { input.trim() }
 
     private fun serveLoginPage(showError: Boolean = false): Response {
         var html = loginPageHtml()
