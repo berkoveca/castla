@@ -35,8 +35,13 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         // app/src/main/jniLibs/<abi>/ ; the package manager extracts any
         // `jniLibs/<abi>/lib*.so` into nativeLibraryDir at install time.
         private const val LIB_NAME = "libcloudflared.so"
-        // Regex to match the trycloudflare URL from cloudflared stdout
+        // Regex to match the trycloudflare URL from cloudflared output. The
+        // bionic (Termux) build prints it on stderr; the static build on stdout,
+        // so both streams are scanned with this.
         private val URL_PATTERN = Regex("""https://[a-zA-Z0-9\-]+\.trycloudflare\.com""")
+        // Give cloudflared up to this long to report a tunnel; after that the UI
+        // sees a timeout error instead of an indefinite "Starting…" state.
+        private const val START_TIMEOUT_MS = 60_000L
 
         /**
          * App-wide singleton so a running cloudflared process + `*.trycloudflare.com`
@@ -56,6 +61,8 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
     private var process: Process? = null
     private var readerThread: Thread? = null
     private var downloadJob: Job? = null
+    private var startTimeoutJob: Job? = null
+    @Volatile private var registered = false
 
     private val _tunnelUrl = MutableStateFlow<String?>(null)
     val tunnelUrl: StateFlow<String?> = _tunnelUrl
@@ -93,8 +100,20 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         }
 
         val config = TunnelSecurityConfig.load(context)
+        registered = false
         _isStarting.value = true
         _error.value = null
+
+        // Safety net: never leave the UI on "Starting tunnel…" forever.
+        startTimeoutJob?.cancel()
+        startTimeoutJob = scope.launch {
+            kotlinx.coroutines.delay(START_TIMEOUT_MS)
+            if (_isStarting.value && !_isRunning.value) {
+                Log.w(TAG, "Tunnel start timed out after ${START_TIMEOUT_MS}ms")
+                _error.value = failureMessage("cloudflared did not report a tunnel within ${START_TIMEOUT_MS / 1000}s")
+                _isStarting.value = false
+            }
+        }
 
         downloadJob = scope.launch {
             try {
@@ -123,6 +142,8 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
     fun stop() {
         Log.i(TAG, "Stopping tunnel")
         downloadJob?.cancel()
+        startTimeoutJob?.cancel()
+        registered = false
         readerThread?.interrupt()
         readerThread = null
 
@@ -158,6 +179,9 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                         stderrTail.add(l)
                         while (stderrTail.size > 40) stderrTail.removeFirst()
                     }
+                    // The bionic (Termux) build writes ALL output — including the
+                    // tunnel URL — to stderr, so registration must be detected here.
+                    onTunnelLine("stderr", l)
                 }
             } catch (e: Exception) {
                 Log.d(TAG, "cloudflared stderr collector ended")
@@ -169,9 +193,40 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
 
     private fun clearStderr() = synchronized(stderrTail) { stderrTail.clear() }
 
+    /**
+     * Shared line handler for both stdout and stderr: flips running/starting when
+     * a quick-tunnel URL or a registered named-tunnel connection appears on
+     * either stream (stream choice differs between the static and bionic builds).
+     */
+    private fun onTunnelLine(stream: String, l: String) {
+        val urlMatch = URL_PATTERN.find(l)
+        if (urlMatch != null) {
+            val url = urlMatch.value
+            Log.i(TAG, "Tunnel URL: $url ($stream)")
+            _tunnelUrl.value = url
+            _isRunning.value = true
+            _isStarting.value = false
+            return
+        }
+        if (!registered &&
+            (l.contains("Registered tunnel connection") || l.contains("Registered tunnel network"))
+        ) {
+            registered = true
+            Log.i(TAG, "Named tunnel connection registered ($stream)")
+            _isRunning.value = true
+            _isStarting.value = false
+        }
+    }
+
     private fun failureMessage(fallback: String): String {
         val lastStderr = currentStderr()
-        val exitCode = try { process?.waitFor() ?: -1 } catch (e: Exception) { -1 }
+        // Non-blocking wait: the process may legitimately still be alive (quick
+        // tunnels are killed explicitly) — never hold up the caller on waitFor.
+        val exitCode = try {
+            if (process?.waitFor(2, java.util.concurrent.TimeUnit.SECONDS) == true)
+                process!!.exitValue()
+            else -1
+        } catch (e: Exception) { -1 }
         val meaningful = lastStderr.asReversed().firstOrNull {
             it.trim().isNotEmpty() && !it.contains(" INF ")
         }
@@ -226,21 +281,14 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                 while (reader.readLine().also { line = it } != null) {
                     val l = line ?: continue
                     Log.d(TAG, "cloudflared: $l")
-
-                    val match = URL_PATTERN.find(l)
-                    if (match != null) {
-                        val url = match.value
-                        Log.i(TAG, "Tunnel URL: $url")
-                        _tunnelUrl.value = url
-                        _isRunning.value = true
-                        _isStarting.value = false
-                    }
+                    onTunnelLine("stdout", l)
                 }
                 // Process exited
                 Log.i(TAG, "cloudflared process exited")
                 if (_isRunning.value) {
                     _tunnelUrl.value = null
                     _isRunning.value = false
+                    _error.value = null
                 } else {
                     _error.value = failureMessage("cloudflared exited without establishing a tunnel")
                 }
@@ -281,7 +329,6 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         // Named tunnel hostname is known up front — surface it immediately.
         _tunnelUrl.value = TunnelSecurityConfig.load(context).namedTunnelUrl.ifBlank { null }
 
-        var registered = false
         readerThread = Thread({
             try {
                 val reader = BufferedReader(InputStreamReader(proc.inputStream))
@@ -289,15 +336,7 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                 while (reader.readLine().also { line = it } != null) {
                     val l = line ?: continue
                     Log.d(TAG, "cloudflared: $l")
-
-                    if (!registered &&
-                        (l.contains("Registered tunnel connection") || l.contains("Registered tunnel network"))
-                    ) {
-                        registered = true
-                        Log.i(TAG, "Named tunnel connection registered")
-                        _isRunning.value = true
-                        _isStarting.value = false
-                    }
+                    onTunnelLine("stdout", l)
                 }
                 // Process exited
                 Log.i(TAG, "cloudflared process exited")
