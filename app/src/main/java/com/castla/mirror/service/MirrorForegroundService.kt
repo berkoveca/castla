@@ -59,6 +59,7 @@ import com.castla.mirror.diagnostics.TerminalReason
 import com.castla.mirror.utils.SplitMath
 import com.castla.mirror.utils.StreamMath
 import com.castla.mirror.ui.SplitWebPresentation
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -207,7 +208,11 @@ class MirrorForegroundService : Service() {
      * when emitting the SESSION_END event so the recorded reason is consistent.
      */
     private val terminalReason = java.util.concurrent.atomic.AtomicReference<TerminalReason?>(null)
-    private var serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private val serviceExceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        Log.e(TAG, "Uncaught exception in serviceScope coroutine", throwable)
+        FileLogger.e(TAG, "serviceScope coroutine failed", throwable)
+    }
+    private var serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob() + serviceExceptionHandler)
     private var resizeJob: Job? = null
     private var pendingBrowserDisconnectJob: Job? = null
     private var browserConnected = false
@@ -2870,17 +2875,18 @@ class MirrorForegroundService : Service() {
                 Log.w(TAG, "Failed to enable freeform support (non-fatal)", e)
             }
 
-            val vdm = VirtualDisplayManager().also { virtualDisplayManager = it }
-            vdm.attachPrivilegedService(svc)
+            try {
+                val vdm = VirtualDisplayManager().also { virtualDisplayManager = it }
+                vdm.attachPrivilegedService(svc)
 
-            // Use latest dimensions/surface in case viewport changed during async wait
-            val actualWidth = if (currentWidth > 0) currentWidth else width
-            val actualHeight = if (currentHeight > 0) currentHeight else height
-            val actualSurface = currentEncoderSurface ?: surface
-            val actualDpi = computeVirtualDisplayDpi(actualWidth, actualHeight)
-            vdm.createVirtualDisplay(actualWidth, actualHeight, actualDpi, actualSurface)
+                // Use latest dimensions/surface in case viewport changed during async wait
+                val actualWidth = if (currentWidth > 0) currentWidth else width
+                val actualHeight = if (currentHeight > 0) currentHeight else height
+                val actualSurface = currentEncoderSurface ?: surface
+                val actualDpi = computeVirtualDisplayDpi(actualWidth, actualHeight)
+                vdm.createVirtualDisplay(actualWidth, actualHeight, actualDpi, actualSurface)
 
-            if (vdm.hasVirtualDisplay()) {
+                if (vdm.hasVirtualDisplay()) {
                 touchInjector?.setVirtualDisplayInjector { action, x, y, pointerId ->
                     vdm.injectInput(action, x, y, pointerId)
                 }
@@ -2893,6 +2899,10 @@ class MirrorForegroundService : Service() {
             } else {
                 safeResult(false)
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "trySetupVirtualDisplay: VD setup threw", e)
+            FileLogger.e(TAG, "trySetupVirtualDisplay VD setup failed", e)
+            safeResult(false)
         }
     }
 

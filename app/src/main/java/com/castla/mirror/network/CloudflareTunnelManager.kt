@@ -2,6 +2,7 @@ package com.castla.mirror.network
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -69,7 +70,10 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
             }
     }
 
-    private val scope = CoroutineScope(Dispatchers.IO + Job())
+    private val scopeExceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        Log.e(TAG, "Uncaught exception in tunnel coroutine", throwable)
+    }
+    private val scope = CoroutineScope(Dispatchers.IO + Job() + scopeExceptionHandler)
     // Serializes start/stop/restart and Process ownership so a stop() (typically
     // invoked from a background coroutine, e.g. the idle-timeout watchdog) can
     // never race with start()/auto-restart and destroy the wrong Process or
