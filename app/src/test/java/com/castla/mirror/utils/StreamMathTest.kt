@@ -217,7 +217,6 @@ class StreamMathTest {
     }
 
     @Test
-    @Test
     fun `avcLevelFor returns correct level for key resolutions`() {
         // 720p (1280x720) = 3600 MBs -> Level 31
         assertEquals(0x200, StreamMath.avcLevelFor(1280, 720))
