@@ -239,14 +239,14 @@ class Fmp4Muxer(
             write(u32(1)) // sample_count
             write(u32(0)) // data_offset placeholder
             write(u32(frameDuration)) // sample_duration
-            write(u32(sample.size)) // sample_size
-            write(u32(sampleFlags)) // sample_flags
+            write(u32(sample.size.toLong())) // sample_size
+            write(u32(sampleFlags.toLong())) // sample_flags
         }.let { box("trun", it.toByteArray()) }
 
         val tfhd = ByteArrayOutputStream().apply {
             write(fullBoxHeader(0, 0x020000 or 0x000008)) // default-base-is-moof | default-sample-flags-present
             write(u32(1)) // track_ID
-            write(u32(sampleFlags)) // default_sample_flags
+            write(u32(sampleFlags.toLong())) // default_sample_flags
         }.let { box("tfhd", it.toByteArray()) }
 
         val tfdt = ByteArrayOutputStream().apply {

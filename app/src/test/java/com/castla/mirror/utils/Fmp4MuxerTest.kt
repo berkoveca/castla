@@ -5,8 +5,10 @@ import org.junit.Test
 
 class Fmp4MuxerTest {
 
-    private fun startCode4(vararg bytes: Int): ByteArray =
-        byteArrayOf(0, 0, 0, 1) + bytes.toByteArray()
+    private fun startCode4(vararg bytes: Int): ByteArray {
+        val rest = ByteArray(bytes.size) { i -> bytes[i].toByte() }
+        return byteArrayOf(0, 0, 0, 1) + rest
+    }
 
     private fun findBox(data: ByteArray, type: String): Int {
         var i = 0
@@ -75,7 +77,7 @@ class Fmp4MuxerTest {
 
     @Test
     fun firstDeltaFrame_isDroppedUntilKeyframe() {
-        val sps = startCode4(0x67, 0x42, 0x00, 0x1E)
+        val sps = startCode4(0x67, 0x42, 0x00, 0x1E, 0x9A, 0x66, 0x02, 0x80)
         val pps = startCode4(0x68, 0xCE, 0x3C)
         val fragments = mutableListOf<ByteArray>()
         val muxer = Fmp4Muxer(sps, pps, 1280, 800, 30, onInit = {}, onFragment = { f, _ -> fragments.add(f) })
@@ -92,7 +94,7 @@ class Fmp4MuxerTest {
 
     @Test
     fun fragment_hasPatchedDataOffsetAndAvccSample() {
-        val sps = startCode4(0x67, 0x42, 0x00, 0x1E)
+        val sps = startCode4(0x67, 0x42, 0x00, 0x1E, 0x9A, 0x66, 0x02, 0x80)
         val pps = startCode4(0x68, 0xCE, 0x3C)
         var fragment: ByteArray? = null
         val muxer = Fmp4Muxer(sps, pps, 1280, 800, 30, onInit = {}, onFragment = { f, _ -> fragment = f })
@@ -126,7 +128,7 @@ class Fmp4MuxerTest {
 
     @Test
     fun frameDuration_scalesWithFps() {
-        val sps = startCode4(0x67, 0x42, 0x00, 0x1E)
+        val sps = startCode4(0x67, 0x42, 0x00, 0x1E, 0x9A, 0x66, 0x02, 0x80)
         val pps = startCode4(0x68, 0xCE, 0x3C)
         val decodeTimes = mutableListOf<Long>()
         val muxer = Fmp4Muxer(sps, pps, 1280, 800, 30, onInit = {}, onFragment = { f, _ ->
