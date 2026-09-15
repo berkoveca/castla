@@ -2,6 +2,29 @@ package com.castla.mirror.utils
 
 object StreamMath {
     /**
+     * Minimum H.264 level (as MediaCodecInfo.CodecProfileLevel.AVCLevel*)
+     * whose per-frame macroblock limit supports the given resolution.
+     * 1920x1080 = 8160 MB -> Level 4 (0x800); 1920x1200 = 9000 MB -> Level 5 (0x4000).
+     */
+    fun avcLevelFor(width: Int, height: Int): Int {
+        val mbCols = (width + 15) / 16
+        val mbRows = (height + 15) / 16
+        val mbs = mbCols * mbRows.toLong()
+        return when {
+            mbs <= 99 -> 0x001 // AVCLevel1
+            mbs <= 396 -> 0x020 // AVCLevel2
+            mbs <= 792 -> 0x040 // AVCLevel21
+            mbs <= 1620 -> 0x100 // AVCLevel3
+            mbs <= 3600 -> 0x200 // AVCLevel31 (720p)
+            mbs <= 5120 -> 0x400 // AVCLevel32
+            mbs <= 8192 -> 0x800 // AVCLevel4 (1080p)
+            mbs <= 8704 -> 0x2000 // AVCLevel42
+            mbs <= 22080 -> 0x4000 // AVCLevel5 (1920x1200)
+            mbs <= 36864 -> 0x8000 // AVCLevel51
+            else -> 0x10000 // AVCLevel52
+        }
+    }
+    /**
      * Calculates target bitrate based on pixel count relative to 720p base (4Mbps).
      * @param width The target width
      * @param height The target height

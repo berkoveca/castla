@@ -63,6 +63,7 @@
     <string name="settings_res_auto">Auto</string>
     <string name="settings_res_720">720p (Normal)</string>
     <string name="settings_res_1080">1080p (High)</string>
+    <string name="settings_res_1200">1200p (Tesla)</string>
     <string name="settings_fps_auto">Auto</string>
 
     <string name="btn_screen_off">Screen Off</string>

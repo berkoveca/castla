@@ -205,6 +205,7 @@ fun SettingsScreen(
                             StreamSettings.Resolution.AUTO -> stringResource(R.string.settings_res_auto)
                             StreamSettings.Resolution.RES_720 -> stringResource(R.string.settings_res_720)
                             StreamSettings.Resolution.RES_1080 -> stringResource(R.string.settings_res_1080)
+                            StreamSettings.Resolution.RES_1200 -> stringResource(R.string.settings_res_1200)
                         }
                         ModernOptionChip(
                             text = localizedLabel,
@@ -621,6 +622,7 @@ fun SettingsScreen(
                         StreamSettings.Resolution.AUTO -> stringResource(R.string.settings_res_auto)
                         StreamSettings.Resolution.RES_720 -> stringResource(R.string.settings_res_720)
                         StreamSettings.Resolution.RES_1080 -> stringResource(R.string.settings_res_1080)
+                        StreamSettings.Resolution.RES_1200 -> stringResource(R.string.settings_res_1200)
                     }
                     val fpsLabel = if (settings.fps == StreamSettings.FPS_AUTO) {
                         stringResource(R.string.settings_fps_auto)

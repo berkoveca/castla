@@ -64,6 +64,7 @@
     <string name="settings_fps_auto">Automatisch</string>
     <string name="settings_res_720">720p (Normaal)</string>
     <string name="settings_res_1080">1080p (Hoog)</string>
+    <string name="settings_res_1200">1200p</string>
 
     <!-- Language -->
     <string name="settings_language">Taal</string>

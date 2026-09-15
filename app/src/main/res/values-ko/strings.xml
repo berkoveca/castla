@@ -66,6 +66,7 @@
     <string name="settings_res_auto">자동</string>
     <string name="settings_res_720">720p (일반)</string>
     <string name="settings_res_1080">1080p (고화질)</string>
+    <string name="settings_res_1200">1200p</string>
     <string name="settings_fps_auto">자동</string>
 
     <string name="btn_screen_off">화면 끄기</string>

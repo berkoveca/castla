@@ -16,7 +16,8 @@ data class StreamSettings(
     enum class Resolution(val maxHeight: Int, val label: String) {
         AUTO(720, "Auto"),
         RES_720(720, "720p (Normal)"),
-        RES_1080(1080, "1080p (High)");
+        RES_1080(1080, "1080p (High)"),
+        RES_1200(1200, "1200p (Tesla 1920x1200)");
     }
 
     /** True when resolution is set to automatic mode */

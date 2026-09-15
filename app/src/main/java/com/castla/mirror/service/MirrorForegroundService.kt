@@ -130,7 +130,9 @@ class MirrorForegroundService : Service() {
             AutoTier(720, 30, "720p30"),
             AutoTier(720, 60, "720p60"),
             AutoTier(1080, 30, "1080p30"),
-            AutoTier(1080, 60, "1080p60")
+            AutoTier(1080, 60, "1080p60"),
+            AutoTier(1200, 30, "1200p30"),
+            AutoTier(1200, 60, "1200p60")
         )
         /** Check interval for auto-scale loop */
         private const val AUTO_SCALE_INTERVAL_MS = 10_000L

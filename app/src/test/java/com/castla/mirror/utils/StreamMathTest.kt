@@ -217,6 +217,20 @@ class StreamMathTest {
     }
 
     @Test
+    @Test
+    fun `avcLevelFor returns correct level for key resolutions`() {
+        // 720p (1280x720) = 3600 MBs -> Level 31
+        assertEquals(0x200, StreamMath.avcLevelFor(1280, 720))
+        // 1080p (1920x1080) = 8160 MBs -> Level 4
+        assertEquals(0x800, StreamMath.avcLevelFor(1920, 1080))
+        // Tesla 1920x1200 = 9000 MBs -> Level 5
+        assertEquals(0x4000, StreamMath.avcLevelFor(1920, 1200))
+        // 1440p (2560x1440) = 14400 MBs -> Level 5
+        assertEquals(0x4000, StreamMath.avcLevelFor(2560, 1440))
+        // 360p (640x360) = 900 MBs -> Level 3
+        assertEquals(0x100, StreamMath.avcLevelFor(640, 360))
+    }
+
     fun `test asymmetric split total bandwidth is reasonable`() {
         // Video on narrow phone pane (405x720) + companion on wide web pane (875x720)
         val videoBitrate = StreamMath.calculateSplitVideoBitrate(405, 720)

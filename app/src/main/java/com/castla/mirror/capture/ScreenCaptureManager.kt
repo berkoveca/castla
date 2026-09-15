@@ -51,7 +51,7 @@ class ScreenCaptureManager(private val context: Context) {
         // Get display metrics for capture resolution
         val metrics = context.resources.displayMetrics
         captureWidth = metrics.widthPixels.coerceAtMost(1920)
-        captureHeight = metrics.heightPixels.coerceAtMost(1080)
+        captureHeight = metrics.heightPixels.coerceAtMost(1200)
         captureDpi = metrics.densityDpi
 
         Log.i(TAG, "Projection initialized: ${captureWidth}x${captureHeight} @ ${captureDpi}dpi")

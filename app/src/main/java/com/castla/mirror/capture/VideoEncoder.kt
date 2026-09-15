@@ -9,6 +9,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
 import android.view.Surface
+import com.castla.mirror.utils.StreamMath
 import java.nio.ByteBuffer
 
 class VideoEncoder(
@@ -39,14 +40,14 @@ class VideoEncoder(
         return try {
             createEncoderWithProfile(
                 MediaCodecInfo.CodecProfileLevel.AVCProfileHigh,
-                MediaCodecInfo.CodecProfileLevel.AVCLevel4,
+                StreamMath.avcLevelFor(width, height),
                 "High"
             )
         } catch (e: Exception) {
             Log.w(TAG, "High Profile failed, falling back to Baseline", e)
             createEncoderWithProfile(
                 MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline,
-                MediaCodecInfo.CodecProfileLevel.AVCLevel31,
+                StreamMath.avcLevelFor(width, height),
                 "Baseline"
             )
         }

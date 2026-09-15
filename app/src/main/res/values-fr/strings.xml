@@ -64,6 +64,7 @@
     <string name="settings_fps_auto">Automatique</string>
     <string name="settings_res_720">720p (Normal)</string>
     <string name="settings_res_1080">1080p (Élevé)</string>
+    <string name="settings_res_1200">1200p</string>
 
     <!-- Language -->
     <string name="settings_language">Langue</string>
