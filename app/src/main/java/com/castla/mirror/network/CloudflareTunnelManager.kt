@@ -42,6 +42,8 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         // Give cloudflared up to this long to report a tunnel; after that the UI
         // sees a timeout error instead of an indefinite "Starting…" state.
         private const val START_TIMEOUT_MS = 60_000L
+        private const val MAX_RESTART_RETRIES = 5
+        private const val RESTART_BASE_DELAY_MS = 3_000L
 
         /**
          * App-wide singleton so a running cloudflared process + `*.trycloudflare.com`
@@ -63,6 +65,10 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
     private var downloadJob: Job? = null
     private var startTimeoutJob: Job? = null
     @Volatile private var registered = false
+    private var lastLocalPort: Int = 9090
+    private var restartCount: Int = 0
+    private var restartJob: Job? = null
+    @Volatile private var intentionalStop = false
 
     private val _tunnelUrl = MutableStateFlow<String?>(null)
     val tunnelUrl: StateFlow<String?> = _tunnelUrl
@@ -100,6 +106,9 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         }
 
         val config = TunnelSecurityConfig.load(context)
+        intentionalStop = false
+        lastLocalPort = localPort
+        restartJob?.cancel()
         registered = false
         _isStarting.value = true
         _error.value = null
@@ -141,6 +150,8 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
 
     fun stop() {
         Log.i(TAG, "Stopping tunnel")
+        intentionalStop = true
+        restartJob?.cancel()
         downloadJob?.cancel()
         startTimeoutJob?.cancel()
         registered = false
@@ -203,6 +214,8 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         if (urlMatch != null) {
             val url = urlMatch.value
             Log.i(TAG, "Tunnel URL: $url ($stream)")
+            restartCount = 0
+            restartJob?.cancel()
             _tunnelUrl.value = url
             _isRunning.value = true
             _isStarting.value = false
@@ -212,6 +225,8 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
             (l.contains("Registered tunnel connection") || l.contains("Registered tunnel network"))
         ) {
             registered = true
+            restartCount = 0
+            restartJob?.cancel()
             Log.i(TAG, "Named tunnel connection registered ($stream)")
             _isRunning.value = true
             _isStarting.value = false
@@ -289,6 +304,7 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                     _tunnelUrl.value = null
                     _isRunning.value = false
                     _error.value = null
+                    scheduleAutoRestart("SSL/network dropped the tunnel")
                 } else {
                     _error.value = failureMessage("cloudflared exited without establishing a tunnel")
                 }
@@ -301,6 +317,32 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                 _isStarting.value = false
             }
         }, "cloudflared-reader").also { it.isDaemon = true; it.start() }
+    }
+
+    /**
+     * Reconnects the tunnel after an unexpected process exit (connector killed,
+     * network blip, edge drop). Bounded tries with a growing backoff — resets
+     * once a connection is re-established. [intentionalStop] suppresses retries
+     * so an explicit stop or teardown stays dead.
+     */
+    private fun scheduleAutoRestart(reason: String) {
+        if (intentionalStop) return
+        if (restartCount >= MAX_RESTART_RETRIES) {
+            Log.w(TAG, "Giving up after ${MAX_RESTART_RETRIES} restart attempts: $reason")
+            _error.value = "Tunnel connection kept dropping ($reason). Please restart mirroring."
+            return
+        }
+        restartCount++
+        val delay = RESTART_BASE_DELAY_MS * restartCount
+        Log.w(TAG, "Tunnel dropped ($reason) — restart $restartCount in ${delay}ms")
+        restartJob?.cancel()
+        restartJob = scope.launch {
+            kotlinx.coroutines.delay(delay)
+            if (!intentionalStop && !_isRunning.value && !_isStarting.value) {
+                Log.i(TAG, "Auto-restarting cloudflared (attempt $restartCount)")
+                start(lastLocalPort)
+            }
+        }
     }
 
     /**
@@ -343,6 +385,8 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                 if (_isRunning.value || registered) {
                     _tunnelUrl.value = null
                     _isRunning.value = false
+                    registered = false
+                    scheduleAutoRestart("named-tunnel connector dropped")
                 }
                 _isStarting.value = false
                 if (!registered) {
