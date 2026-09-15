@@ -314,7 +314,7 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
             throw IllegalStateException("cloudflared binary not found at ${binary.absolutePath}")
         }
 
-        val cmd = listOf(binary.absolutePath, "tunnel", "run", token)
+        val cmd = listOf(binary.absolutePath, "tunnel", "run", "--token", token)
         Log.i(TAG, "Starting NAMED tunnel: cloudflared tunnel run <redacted>")
 
         val pb = ProcessBuilder(cmd)
