@@ -139,11 +139,10 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
     }
 
     /**
-     * cloudflared (static Go) writes its real errors to stderr. It also does its
-     * own DNS resolution by reading `/etc/resolv.conf` — which does not exist on
-     * stock Android — so it quietly fails with "connection refused" to loopback
-     * :53. Capture stderr (bounded tail) so the UI can surface the TRUE cause
-     * instead of an opaque "exited without establishing a tunnel".
+     * cloudflared writes its real errors to stderr. We ship a bionic-linked build
+     * (from Termux's package) so DNS resolves through Android's netd like any app,
+     * but capture the stderr tail anyway so failures are explained instead of an
+     * opaque "exited without establishing a tunnel".
      */
     private val stderrTail = java.util.LinkedList<String>()
 
@@ -186,9 +185,8 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         return if (lower.contains("lookup") || lower.contains("resolver") ||
             lower.contains("no such host") || lower.contains("connection refused")
         ) {
-            "$base — DNS for this device is not reachable from the cloudflared binary. " +
-                "Android exposes no /etc/resolv.conf to it, so use the permanent (named) " +
-                "tunnel or connect to a network that supplies DNS to it."
+            "$base — DNS resolution to Cloudflare is failing on this device's " +
+                "network. Check that the device has working internet access and retry."
         } else {
             base
         }
@@ -210,18 +208,11 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         Log.i(TAG, "Starting: ${cmd.joinToString(" ")}")
 
         val pb = ProcessBuilder(cmd)
-        // cloudflared is a static Go binary — on Android its default CA lookup
-        // paths (/etc/ssl/certs/...) don't exist, so TLS verification against
-        // api.trycloudflare.com fails with "certificate signed by unknown
-        // authority". Point it at Android's system CA store (world-readable
-        // hashed dir present since Android 7, minSdk 26).
+        // The bionic build uses Android's CA store only if told where it is, so
+        // point it at /system/etc/security/cacerts (world-readable hashed dir
+        // present since Android 7, minSdk 26).
         pb.environment()["SSL_CERT_DIR"] = "/system/etc/security/cacerts"
         pb.environment()["SSL_CERT_FILE"] = "/system/etc/security/cacerts/cacert.pem"
-
-        if (!File("/etc/resolv.conf").exists() && !File("/system/etc/resolv.conf").exists()) {
-            Log.w(TAG, "No resolv.conf on this device — cloudflared (static Go) must rely on the " +
-                "permanent tunnel or a network that provisions DNS into the OS")
-        }
 
         val proc = pb.start()
         process = proc

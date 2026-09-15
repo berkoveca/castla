@@ -32,8 +32,20 @@ jobs:
         run: |
           set -e
           mkdir -p app/src/main/jniLibs/arm64-v8a
-          curl -fsSL -o app/src/main/jniLibs/arm64-v8a/libcloudflared.so \
-            "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"
+          # Termux packages a cloudflared linked against Android's bionic libc
+          # (NEEDED libc/libdl/liblog), so it resolves DNS through the system
+          # resolver (netd) exactly like a normal app. The official static
+          # linux-arm64 release does its own DNS and cannot read /etc/resolv.conf
+          # on Android (it does not exist), making quick tunnels fail with
+          # "connection refused" to loopback :53. So pull the Termux package.
+          curl -fsSL https://packages.termux.dev/apt/termux-main/dists/stable/main/binary-aarch64/Packages -o packages.idx
+          DEB=$(awk '/^Package: cloudflared$/{c=1} c && /^Filename:/{print $2; exit}' packages.idx)
+          curl -fsSL "https://packages.termux.dev/apt/termux-main/$DEB" -o cloudflared.deb
+          mkdir -p deb && cd deb
+          ar x ../cloudflared.deb
+          tar -xJf data.tar.xz
+          cd ..
+          cp deb/data/data/com.termux/files/usr/bin/cloudflared app/src/main/jniLibs/arm64-v8a/libcloudflared.so
           chmod +x app/src/main/jniLibs/arm64-v8a/libcloudflared.so
           ls -la app/src/main/jniLibs/arm64-v8a/
 
