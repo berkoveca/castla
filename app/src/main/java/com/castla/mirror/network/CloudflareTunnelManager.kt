@@ -296,6 +296,19 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         }
     }
 
+    /**
+     * Records WHY cloudflared died: the OS exit code plus the stderr tail. This
+     * is the only signal we get when a tunnel "drops mid-session", so surface it
+     * instead of letting the process vanish silently.
+     */
+    private fun logProcessExit(proc: Process, kind: String) {
+        val code = try {
+            if (proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)) proc.exitValue() else -1
+        } catch (e: Exception) { -1 }
+        val tail = currentStderr().takeLast(8)
+        Log.w(TAG, "cloudflared exited ($kind): exitCode=$code | stderr tail: ${tail.joinToString(" || ")}")
+    }
+
     private fun startQuickTunnelProcess(localPort: Int) {
         val binary = binaryFile()
         if (!binary.exists()) {
@@ -334,6 +347,7 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                 }
                 // Process exited
                 Log.i(TAG, "cloudflared process exited")
+                logProcessExit(proc, "quick")
                 if (_isRunning.value) {
                     _tunnelUrl.value = null
                     _isRunning.value = false
@@ -451,14 +465,15 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                 }
                 // Process exited
                 Log.i(TAG, "cloudflared process exited")
-                if (_isRunning.value || registered) {
-                    _tunnelUrl.value = null
-                    _isRunning.value = false
-                    registered = false
-                    scheduleAutoRestart("named-tunnel connector dropped")
-                }
+                logProcessExit(proc, "named")
+                val wasLive = _isRunning.value || registered
+                _tunnelUrl.value = null
+                _isRunning.value = false
+                registered = false
                 _isStarting.value = false
-                if (!registered) {
+                if (wasLive) {
+                    scheduleAutoRestart("named-tunnel connector dropped")
+                } else {
                     scheduleInitialStartRetry("cloudflared exited before registering the named tunnel")
                 }
             } catch (e: InterruptedException) {

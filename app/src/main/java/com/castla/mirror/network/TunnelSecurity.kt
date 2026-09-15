@@ -104,8 +104,15 @@ data class TunnelSecurityConfig(
         fun hasNamedTunnel(config: TunnelSecurityConfig): Boolean =
             config.namedTunnelToken.isNotBlank()
 
-        /** True when the user chose the permanent tunnel: toggle on AND a token present. */
+        /**
+         * Prefer the permanent (stable-URL) tunnel whenever a connector token is
+         * present. A saved token is meaningless for quick tunnels, and silently
+         * falling back to a quick tunnel means every reconnect spawns a NEW
+         * *.trycloudflare.com URL — which drops an in-progress mirroring session
+         * because the client can no longer reach the old URL. The in-UI toggle
+         * only exists to *disable* a token the user no longer wants.
+         */
         fun shouldUseNamedTunnel(config: TunnelSecurityConfig): Boolean =
-            config.namedTunnelEnabled && hasNamedTunnel(config)
+            hasNamedTunnel(config)
     }
 }
