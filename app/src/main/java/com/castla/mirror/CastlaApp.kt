@@ -13,6 +13,11 @@ class CastlaApp : Application() {
                 FileLogger.e("UEH", "Uncaught on ${thread.name}", throwable)
             } catch (_: Throwable) {
             }
+            // Best-effort: release any live virtual displays synchronously so system_server
+            // does not reboot when it later tries to launch home on an orphaned VD.
+            try {
+                com.castla.mirror.service.MirrorForegroundService.instance?.emergencyReleaseDisplays()
+            } catch (_: Throwable) { }
             previous?.uncaughtException(thread, throwable)
         }
     }

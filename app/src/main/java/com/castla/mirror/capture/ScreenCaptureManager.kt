@@ -72,7 +72,8 @@ class ScreenCaptureManager(private val context: Context) {
             width,
             height,
             captureDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR or
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_DESTROY_CONTENT_ON_REMOVAL,
             surface,
             null,
             null

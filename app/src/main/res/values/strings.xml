@@ -76,6 +76,7 @@
     <string name="btn_screen_off">Screen Off</string>
     <string name="btn_screen_on">Screen On</string>
     <string name="toast_thermal_warning">⚠️ Device is very hot. Mirroring quality may be reduced.</string>
+    <string name="toast_thermal_emergency">⚠️ Device too hot — stopped mirroring to prevent shutdown. Let it cool down.</string>
 
     <!-- Samsung USB config advisory (Default USB Configuration regression) -->
     <string name="dialog_usb_config_title">Shizuku may drop on screen lock</string>

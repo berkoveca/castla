@@ -46,6 +46,7 @@ import com.castla.mirror.utils.LaunchMode
 import com.castla.mirror.policy.AutoScaleDecision
 import com.castla.mirror.policy.AutoScaleInput
 import com.castla.mirror.policy.AutoScalePolicy
+import com.castla.mirror.policy.ThermalMitigationPolicy
 import com.castla.mirror.policy.CodecModeTransition
 import com.castla.mirror.policy.DisconnectPolicy
 import com.castla.mirror.policy.ScreenOffAction
@@ -143,6 +144,8 @@ class MirrorForegroundService : Service() {
         private const val AUTO_SCALE_INTERVAL_MS = 10_000L
         /** Initial delay before first auto-scale evaluation */
         private const val AUTO_SCALE_INITIAL_DELAY_MS = 5_000L
+        /** Poll interval for proactive thermal-headroom monitoring (API 30+). */
+        private const val THERMAL_HEADROOM_INTERVAL_MS = 5_000L
         // Grace period constants are now in DisconnectPolicy
         /** Interval for poking the VD awake while the physical screen is off. */
         private const val VD_KEEP_ALIVE_INTERVAL_MS = 30_000L
@@ -237,6 +240,8 @@ class MirrorForegroundService : Service() {
     private var targetBitrate: Int = 4_000_000
     private var lastCongestionTimeMs = 0L
     private var abrJob: Job? = null
+    // Proactive thermal-headroom monitor (polled, more sensitive than the status callback)
+    private var thermalHeadroomJob: Job? = null
     // Thermal throttling: stores original bitrate before thermal reduction for restoration
     private var preThermalTargetBitrate: Int = 0
     // Thermal fps/resolution overrides — applied by rebuildPipeline when non-null
@@ -417,64 +422,6 @@ class MirrorForegroundService : Service() {
         }
 
         when (status) {
-            PowerManager.THERMAL_STATUS_CRITICAL,
-            PowerManager.THERMAL_STATUS_EMERGENCY -> {
-                Log.w(TAG, "Thermal status CRITICAL/EMERGENCY ($status) — warning only, continuing")
-                android.os.Handler(mainLooper).post {
-                    android.widget.Toast.makeText(
-                        this,
-                        getString(R.string.toast_thermal_warning),
-                        android.widget.Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-            PowerManager.THERMAL_STATUS_SEVERE -> {
-                Log.w(TAG, "Thermal status SEVERE ($status) - Throttling encoder heavily + fps/resolution")
-                val newBitrate = (preThermalTargetBitrate * 0.4).toInt().coerceAtLeast(500_000)
-                currentBitrate = newBitrate
-                targetBitrate = newBitrate
-                videoEncoder?.setBitrate(currentBitrate)
-                jpegEncoder?.setFps(8)
-                // Stop audio on SEVERE to reduce CPU load
-                Log.w(TAG, "Thermal SEVERE — stopping audio capture to reduce CPU load")
-                audioOrchestrator?.stop()
-                // Drop fps to 15 and cap resolution at 720p
-                thermalFpsOverride = 15
-                thermalMaxHeight = 720
-                // Reset auto tier to most conservative
-                autoTierIndex = 0
-                autoStableCount = 0
-                if (browserConnected) {
-                    serviceScope.launch { rebuildPipeline(currentWidth, currentHeight, force = true) }
-                }
-            }
-            PowerManager.THERMAL_STATUS_MODERATE -> {
-                Log.w(TAG, "Thermal status MODERATE ($status) - Throttling encoder + fps drop to 20")
-                val newBitrate = (preThermalTargetBitrate * 0.6).toInt().coerceAtLeast(500_000)
-                currentBitrate = newBitrate
-                targetBitrate = newBitrate
-                videoEncoder?.setBitrate(currentBitrate)
-                jpegEncoder?.setFps(12)
-                // Drop fps to 20
-                thermalFpsOverride = 20
-                thermalMaxHeight = null
-                // Reset auto tier to most conservative
-                autoTierIndex = 0
-                autoStableCount = 0
-                if (browserConnected) {
-                    serviceScope.launch { rebuildPipeline(currentWidth, currentHeight, force = true) }
-                }
-            }
-            PowerManager.THERMAL_STATUS_LIGHT -> {
-                Log.i(TAG, "Thermal status LIGHT ($status) - Preemptive throttling")
-                val newBitrate = (preThermalTargetBitrate * 0.85).toInt().coerceAtLeast(500_000)
-                currentBitrate = newBitrate
-                targetBitrate = newBitrate
-                videoEncoder?.setBitrate(currentBitrate)
-                // Clear fps/resolution overrides at LIGHT
-                thermalFpsOverride = null
-                thermalMaxHeight = null
-            }
             PowerManager.THERMAL_STATUS_NONE -> {
                 Log.i(TAG, "Thermal status NONE ($status) - Restoring full bitrate and fps")
                 thermalFpsOverride = null
@@ -490,10 +437,94 @@ class MirrorForegroundService : Service() {
                     }
                 }
             }
+            else -> {
+                // Every non-NONE level now applies REAL mitigation. CRITICAL/EMERGENCY used to
+                // only show a toast and keep running full-tilt, which let the device reach a
+                // framework thermal SHUTDOWN (instant power-off) or a thermal REBOOT. At
+                // EMERGENCY the policy requests a clean session stop so the SoC can cool.
+                val action = ThermalMitigationPolicy.evaluate(status)
+                applyThermalAction(action)
+            }
         }
 
         // Broadcast thermal status to browser for playback profile auto-switching
         broadcastThermalStatus(status)
+    }
+
+    /**
+     * Apply a [ThermalMitigationPolicy.Action] to the live pipeline. Safe to call
+     * repeatedly (e.g. from the thermal-headroom monitor). Only rebuilds the
+     * pipeline when the fps/resolution override actually changes, so sustained
+     * thermal pressure does not thrash the encoder.
+     */
+    private fun applyThermalAction(action: ThermalMitigationPolicy.Action) {
+        if (action.bitrateFactor != null && preThermalTargetBitrate > 0) {
+            val newBitrate = (preThermalTargetBitrate * action.bitrateFactor).toInt()
+                .coerceAtLeast(ThermalMitigationPolicy.MIN_BITRATE)
+            if (newBitrate != currentBitrate) {
+                currentBitrate = newBitrate
+                targetBitrate = newBitrate
+                videoEncoder?.setBitrate(currentBitrate)
+            }
+        }
+
+        if (action.jpegFps != null) {
+            jpegEncoder?.setFps(action.jpegFps)
+        }
+
+        val fpsChanged = action.fpsOverride != thermalFpsOverride
+        val heightChanged = action.maxHeight != thermalMaxHeight
+        thermalFpsOverride = action.fpsOverride
+        thermalMaxHeight = action.maxHeight
+
+        if (action.stopAudio) {
+            Log.w(TAG, "Thermal ${action.label} — stopping audio capture to reduce CPU load")
+            audioOrchestrator?.stop()
+        }
+
+        if (action.stopSecondary && (secondaryVideoEncoder != null || secondaryJpegEncoder != null)) {
+            Log.w(TAG, "Thermal ${action.label} — tearing down secondary encoder to reduce heat")
+            releaseSecondaryPipeline(clearState = false)
+        }
+
+        if (action.emergencyStop) {
+            Log.w(TAG, "Thermal ${action.label} — EMERGENCY: stopping session to protect device from thermal shutdown/reboot")
+            android.os.Handler(mainLooper).post {
+                try {
+                    android.widget.Toast.makeText(
+                        this,
+                        getString(R.string.toast_thermal_emergency),
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                } catch (_: Throwable) {}
+            }
+            requestStopAsync("thermal_${action.label}")
+            return
+        }
+
+        // Reset auto tier to most conservative so auto-scale doesn't climb back up while hot.
+        autoTierIndex = 0
+        autoStableCount = 0
+
+        if (action.label == "critical" || action.label == "emergency") {
+            android.os.Handler(mainLooper).post {
+                try {
+                    android.widget.Toast.makeText(
+                        this,
+                        getString(R.string.toast_thermal_warning),
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                } catch (_: Throwable) {}
+            }
+        }
+
+        if (browserConnected && (fpsChanged || heightChanged)) {
+            serviceScope.launch { rebuildPipeline(currentWidth, currentHeight, force = true) }
+        }
+
+        Log.w(TAG, "Thermal mitigation applied: ${action.label} bitrate=${currentBitrate / 1000}kbps " +
+            "fpsOverride=${action.fpsOverride} maxHeight=${action.maxHeight} " +
+            "stopAudio=${action.stopAudio} stopSecondary=${action.stopSecondary}")
     }
 
     private fun broadcastThermalStatus(status: Int) {
@@ -877,6 +908,7 @@ class MirrorForegroundService : Service() {
         try { resizeJob?.cancel() } catch (_: Exception) {}
         try { abrJob?.cancel() } catch (_: Exception) {}
         try { autoScaleJob?.cancel() } catch (_: Exception) {}
+        try { thermalHeadroomJob?.cancel() } catch (_: Exception) {}
         try { serviceScope.cancel() } catch (_: Exception) {}
         try { compositionDispatcher.close() } catch (_: Exception) {}
 
@@ -1010,6 +1042,47 @@ class MirrorForegroundService : Service() {
                 }
             }
         }
+    }
+
+    /**
+     * Proactively poll [PowerManager.getThermalHeadroom] (API 30+) and back off
+     * *before* the thermal status callback escalates. Headroom predicts seconds
+     * ahead, so catching a downward trend early is what actually prevents the
+     * device from reaching a framework thermal SHUTDOWN (instant power-off) or a
+     * thermal REBOOT. Only meaningful on Android 11+; older devices rely solely
+     * on the status listener.
+     */
+    private fun startThermalHeadroomMonitor() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        thermalHeadroomJob?.cancel()
+        thermalHeadroomJob = serviceScope.launch {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            while (isServiceRunning && browserConnected) {
+                kotlinx.coroutines.delay(THERMAL_HEADROOM_INTERVAL_MS)
+                try {
+                    val headroom = pm.getThermalHeadroom(10)
+                    if (headroom.isNaN()) continue
+                    val action = ThermalMitigationPolicy.evaluate(_thermalStatus.value, headroom)
+                    if (action != ThermalMitigationPolicy.Action.NONE) {
+                        applyThermalAction(action)
+                    }
+                } catch (_: Throwable) {
+                    // Headroom polling is best-effort; never let it break streaming.
+                }
+            }
+        }
+    }
+
+    /**
+     * Best-effort synchronous release of any live virtual displays. Called from
+     * the app-wide uncaught-exception handler so that, even if the process is
+     * about to die, system_server does not later try to launch home on an
+     * orphaned virtual display (which throws an NPE in system_server and reboots
+     * the phone). Mirrors the documented reboot risk in [performCleanup].
+     */
+    fun emergencyReleaseDisplays() {
+        try { virtualDisplayManager?.release() } catch (_: Throwable) {}
+        try { screenCapture?.release() } catch (_: Throwable) {}
     }
 
     /**
@@ -2867,6 +2940,10 @@ class MirrorForegroundService : Service() {
             mainHandler.removeCallbacks(tunnelOrphanStopRunnable)
 
             acquireWakeLocks()
+
+            // Proactively watch thermal headroom so we back off before the device
+            // reaches a framework thermal SHUTDOWN (instant power-off) / REBOOT.
+            startThermalHeadroomMonitor()
 
             // Send current thermal status to new browser client for profile auto-switching
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
