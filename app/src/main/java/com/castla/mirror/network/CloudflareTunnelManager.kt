@@ -113,6 +113,7 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
      *    `cloudflared tunnel run <token>` for a permanent configured hostname.
      */
     fun start(localPort: Int = 9090) {
+        val config = TunnelSecurityConfig.load(context)
         lifecycleLock.lock()
         try {
             if (_isRunning.value || _isStarting.value) {
@@ -120,7 +121,6 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                 return
             }
 
-            val config = TunnelSecurityConfig.load(context)
             intentionalStop = false
             lastLocalPort = localPort
             restartJob?.cancel()
