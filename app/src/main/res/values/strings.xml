@@ -102,6 +102,7 @@
     <string name="settings_named_token">Connector token</string>
     <string name="settings_named_url">Your public hostname (https://…)</string>
     <string name="home_tunnel_password_protected">· password protected</string>
+    <string name="home_waiting_for_tunnel">Waiting for your Cloudflare tunnel link…</string>
 
     <!-- Support / Donate -->
     <string name="settings_support_title">Support the Developer</string>

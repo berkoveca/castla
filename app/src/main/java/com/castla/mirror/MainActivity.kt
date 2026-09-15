@@ -24,7 +24,6 @@ import android.util.Log
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import java.io.File
-import com.castla.mirror.server.MirrorServer
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -56,9 +55,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import com.castla.mirror.network.IpSelector
 import com.castla.mirror.network.NetworkMonitor
-import com.castla.mirror.network.NetworkState
 import com.castla.mirror.service.MirrorForegroundService
 import com.castla.mirror.service.TeslaBleScanner
 import com.castla.mirror.service.TeslaDetectNotifier
@@ -89,9 +86,6 @@ class MainActivity : AppCompatActivity() {
 
     private var isStreaming by mutableStateOf(false)
     private var isPreparing by mutableStateOf(false)
-    private var serverUrl by mutableStateOf("")
-    private var alternateUrls by mutableStateOf<List<String>>(emptyList())
-    private var currentIp by mutableStateOf("0.0.0.0")
     private var showSettings by mutableStateOf(false)
     private var streamSettings by mutableStateOf(StreamSettings())
     private var shizukuInstalled by mutableStateOf(false)
@@ -140,7 +134,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            updateServerUrl()
             serviceBound = true
             bindRequested = false
         }
@@ -215,23 +208,6 @@ class MainActivity : AppCompatActivity() {
             showSettings = true
         }
 
-        lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
-                networkMonitor.state.collect { state ->
-                    when (state) {
-                        is NetworkState.Connected -> {
-                            currentIp = state.ip
-                            updateServerUrl()
-                        }
-                        is NetworkState.Disconnected -> {
-                            currentIp = "0.0.0.0"
-                            updateServerUrl()
-                        }
-                    }
-                }
-            }
-        }
-
         // Sync UI streaming state when service stops externally
         // (e.g. notification action, thermal auto-stop, crash)
         lifecycleScope.launch {
@@ -248,7 +224,6 @@ class MainActivity : AppCompatActivity() {
                             serviceBound = false
                             bindRequested = false
                         }
-                        updateServerUrl()
                     }
                 }
             }
@@ -360,8 +335,6 @@ class MainActivity : AppCompatActivity() {
                     CastlaScreen(
                         isStreaming = isStreaming,
                         isPreparing = isPreparing,
-                        serverUrl = serverUrl,
-                        alternateUrls = alternateUrls,
                         shizukuInstalled = shizukuInstalled,
                         shizukuRunning = shizukuRunning,
                         shizukuPermitted = shizukuPermitted,
@@ -578,17 +551,9 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    // Trusts NetworkMonitor's address (a learned one once a browser has reached
-    // us, the priority pick before that). Until a real connection settles it the
-    // pick is a guess, so the remaining candidates are offered alongside it.
-    private fun updateServerUrl() {
-        val ip = currentIp
-        serverUrl = urlFor(ip)
-        alternateUrls = IpSelector.alternativesTo(ip, IpSelector.scan()).map { urlFor(it) }
-    }
-
-    private fun urlFor(ip: String): String =
-        IpSelector.advertiseUrl(ip, MirrorServer.DEFAULT_PORT)
+    // The connection link is provided exclusively by the Cloudflare tunnel
+    // (see CloudflareTunnelManager), so there is no local-IP URL to compute or
+    // display here.
 
     private fun togglePanelOff() {
         val service = mirrorService ?: MirrorForegroundService.instance ?: return
@@ -986,12 +951,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun launchMirrorService(resultCode: Int, data: Intent) {
-        // Forced URL_SELECTED right before the session, with currentIp synced to the
-        // same scan: the log must show the IP the UI actually advertised, and a
-        // pre-run log-clear wipes the file but not the logger's dedupe state.
-        val netState = networkMonitor.refresh(forceLog = true)
-        currentIp = (netState as? NetworkState.Connected)?.ip ?: "0.0.0.0"
-        updateServerUrl()
+        // Refresh network state for diagnostics before the session starts.
+        networkMonitor.refresh(forceLog = true)
         val intent = Intent(this, MirrorForegroundService::class.java).apply {
             putExtra(MirrorForegroundService.EXTRA_RESULT_CODE, resultCode)
             putExtra(MirrorForegroundService.EXTRA_DATA, data)
@@ -1051,7 +1012,6 @@ class MainActivity : AppCompatActivity() {
         if (!preservePreparingState) {
             isPreparing = false
         }
-        updateServerUrl()
         com.castla.mirror.widget.MirrorWidgetProvider.updateAllWidgets(this)
     }
 }
@@ -1060,8 +1020,6 @@ class MainActivity : AppCompatActivity() {
 fun CastlaScreen(
     isStreaming: Boolean,
     isPreparing: Boolean = false,
-    serverUrl: String,
-    alternateUrls: List<String> = emptyList(),
     shizukuInstalled: Boolean,
     shizukuRunning: Boolean,
     shizukuPermitted: Boolean = false,
@@ -1225,33 +1183,17 @@ fun CastlaScreen(
                         )
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        Text(
-                            text = serverUrl,
-                            fontSize = 24.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = Color(0xFF69F0AE),
-                            textAlign = TextAlign.Center
-                        )
-
-                        if (alternateUrls.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(20.dp))
+                        // Local LAN IP addresses are intentionally NOT shown here.
+                        // This app connects exclusively through a Cloudflare tunnel
+                        // (quick or token-based named tunnel), so there is no
+                        // hotspot / local-Wi-Fi connection path to advertise.
+                        if (cloudflareTunnelUrl == null && cloudflareTunnelError == null) {
                             Text(
-                                text = stringResource(id = R.string.label_alternate_urls),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color.White.copy(alpha = 0.6f),
+                                text = stringResource(id = R.string.home_waiting_for_tunnel),
+                                fontSize = 15.sp,
+                                color = Color.White.copy(alpha = 0.7f),
                                 textAlign = TextAlign.Center
                             )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            alternateUrls.forEach { url ->
-                                Text(
-                                    text = url,
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White.copy(alpha = 0.85f),
-                                    textAlign = TextAlign.Center,
-                                    modifier = Modifier.padding(vertical = 2.dp)
-                                )
-                            }
                         }
 
                         if (cloudflareTunnelActive || cloudflareTunnelError != null) {
