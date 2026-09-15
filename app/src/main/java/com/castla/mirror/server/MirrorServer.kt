@@ -487,36 +487,45 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
      * only decodes application/x-www-form-urlencoded into session parameters, so
      * we additionally parse the raw body ourselves (which also drains the socket).
      */
+    /**
+     * Reads the password from the form POST regardless of content type. NanoHTTPD
+     * only decodes application/x-www-form-urlencoded into session parameters, so
+     * we additionally parse the raw body ourselves (which also drains the socket).
+     */
     private fun extractPassword(session: IHTTPSession): String {
         val contentType = session.headers["content-type"].orEmpty().lowercase()
         if (contentType.isNotEmpty() && !contentType.startsWith("application/x-www-form-urlencoded")) {
             Log.d(TAG, "Auth submit with non-form content type: $contentType")
         }
 
-        // Query-string params (fallback for GET-style submits).
+        // Query-string params (already decoded for GET-style /?password=... submits).
         session.parameters["password"]?.firstOrNull()?.let { return it }
 
-        // Form body: NanoHTTPD decodes urlencoded here; raw body keys are read
-        // below to also cover text/plain and other encodings.
-        val parsed = linkedMapOf<String, String>()
-        try {
+        // Parse the body: NanoHTTPD fills session parameters for urlencoded forms
+        // and exposes the raw body under "postData" for any other content type.
+        val rawBody: String? = try {
+            val parsed = linkedMapOf<String, String>()
             session.parseBody(parsed)
+            parsed["postData"]
         } catch (e: Exception) {
             Log.w(TAG, "Failed to parse auth body: ${e.message}")
+            null
         }
-        parsed["password"]?.let { return it }
 
-        val raw = parsed[NanoHTTPD.Params.POST_DATA] ?: parsed[NanoHTTPD.Params.PRE_POST_DATA]
-        val form = raw.orEmpty()
+        // For urlencoded forms, decodeParms() runs inside parseBody and populates
+        // the same map returned by getParameters(), so re-read after the parse.
+        session.parameters["password"]?.firstOrNull()?.let { return it }
+
+        // text/plain and other encodings — parse the raw body ourselves.
+        return rawBody.orEmpty()
             .split("&")
             .mapNotNull { pair ->
                 val kv = pair.split("=", limit = 2)
                 if (kv.size != 2) return@mapNotNull null
-                val key = percentDecode(kv[0])
-                if (key == "password") percentDecode(kv[1]) else null
+                if (percentDecode(kv[0]) == "password") percentDecode(kv[1]) else null
             }
             .firstOrNull()
-        return form.orEmpty()
+            .orEmpty()
     }
 
     private fun percentDecode(input: String): String =
