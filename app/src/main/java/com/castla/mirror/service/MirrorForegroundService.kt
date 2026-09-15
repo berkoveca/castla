@@ -129,6 +129,10 @@ class MirrorForegroundService : Service() {
         val AUTO_TIERS = listOf(
             AutoTier(720, 30, "720p30"),
             AutoTier(720, 60, "720p60"),
+            AutoTier(800, 30, "800p30"),
+            AutoTier(800, 60, "800p60"),
+            AutoTier(960, 30, "960p30"),
+            AutoTier(960, 60, "960p60"),
             AutoTier(1080, 30, "1080p30"),
             AutoTier(1080, 60, "1080p60"),
             AutoTier(1200, 30, "1200p30"),
@@ -212,6 +216,10 @@ class MirrorForegroundService : Service() {
     private var currentSecondaryWebUrl: String? = null
     private var secondaryVideoEncoder: VideoEncoder? = null
     private var secondaryJpegEncoder: JpegEncoder? = null
+
+    // fMP4 (MSE) muxers — one per channel. Active only when currentCodecMode == "fmp4".
+    private var fmp4Muxer: Fmp4Muxer? = null
+    private var secondaryFmp4Muxer: Fmp4Muxer? = null
     private var secondaryTouchInjector: TouchInjector? = null
     private var secondaryDisplayId: Int = -1
     private var secondaryWidth: Int = 0
@@ -895,6 +903,8 @@ class MirrorForegroundService : Service() {
         screenCapture = null
         videoEncoder = null
         jpegEncoder = null
+        fmp4Muxer = null
+        secondaryFmp4Muxer = null
         touchInjector = null
         mirrorServer = null
 
@@ -1413,6 +1423,7 @@ class MirrorForegroundService : Service() {
         secondaryVideoEncoder = null
         secondaryJpegEncoder?.release()
         secondaryJpegEncoder = null
+        secondaryFmp4Muxer = null
         mirrorServer?.setKeyframeRequester("secondary") {}
         secondaryTouchInjector?.release()
         secondaryTouchInjector = null
@@ -1460,6 +1471,7 @@ class MirrorForegroundService : Service() {
         secondaryVideoEncoder = null
         secondaryJpegEncoder?.release()
         secondaryJpegEncoder = null
+        secondaryFmp4Muxer = null
         mirrorServer?.setKeyframeRequester("secondary") {}
 
         val surface = if (currentCodecMode == "mjpeg") {
@@ -1476,9 +1488,7 @@ class MirrorForegroundService : Service() {
         } else {
             val encoder = VideoEncoder(width, height, secondaryBitrate(width, height), currentFps)
             val inputSurface = encoder.createInputSurface()
-            encoder.onSpsPps = { spsPps -> mirrorServer?.broadcastSpsPps(spsPps, "secondary") }
-            encoder.start { frameData, isKeyFrame -> mirrorServer?.broadcastFrame(frameData, isKeyFrame, "secondary") }
-            mirrorServer?.setKeyframeRequester("secondary") { encoder.requestKeyFrame() }
+            wireVideoEncoderRouting(encoder, width, height, currentFps, "secondary", { secondaryFmp4Muxer }, { secondaryFmp4Muxer = it })
             secondaryVideoEncoder = encoder
             inputSurface
         }
@@ -2862,8 +2872,22 @@ class MirrorForegroundService : Service() {
                 broadcastThermalStatus(_thermalStatus.value)
             }
 
-            if (videoEncoder != null) {
-                // Reconnection — rebuild existing pipeline and restart audio
+            // Inform the client which streaming mode is configured so it can
+            // request the matching decoder (e.g. MSE/H.264 for Tesla MCU2).
+            val configuredMode = com.castla.mirror.ui.StreamSettings.load(this).streamingMode
+            mirrorServer?.broadcastControlMessage(
+                JSONObject().apply {
+                    put("type", "streamingMode")
+                    put("mode", configuredMode.name.lowercase())
+                }.toString()
+            )
+
+            if (videoEncoder != null || jpegEncoder != null) {
+                // Reconnection — rebuild existing pipeline and restart audio.
+                // Check BOTH encoders: in MJPEG mode videoEncoder is null and the
+                // active encoder is jpegEncoder. Missing it made reconnect in MJPEG
+                // mode fall through to the first-connection branch and spin up a
+                // redundant H.264 encoder on top of the still-live JPEG pipeline.
                 Log.i(TAG, "Browser reconnected — rebuilding pipeline")
                 serviceScope.launch {
                     rebuildPipeline(currentWidth, currentHeight, force = true)
@@ -2890,12 +2914,7 @@ class MirrorForegroundService : Service() {
                 val surface = encoder.createInputSurface()
                 currentEncoderSurface = surface
 
-                mirrorServer?.setKeyframeRequester("primary") { encoder.requestKeyFrame() }
-
-                encoder.onSpsPps = { spsPps -> mirrorServer?.broadcastSpsPps(spsPps) }
-                encoder.start { frameData, isKeyFrame ->
-                    mirrorServer?.broadcastFrame(frameData, isKeyFrame)
-                }
+                wireVideoEncoderRouting(encoder, width, height, fps, "primary", { fmp4Muxer }, { fmp4Muxer = it })
 
                 trySetupVirtualDisplay(width, height, surface) { shizukuActive ->
                     if (shizukuActive) {
@@ -3049,10 +3068,14 @@ class MirrorForegroundService : Service() {
         videoEncoder = null
         jpegEncoder?.release()
         jpegEncoder = null
+        fmp4Muxer = null
+        secondaryFmp4Muxer = null
         currentEncoderSurface = null
 
         abrJob?.cancel()
         abrJob = null
+        autoScaleJob?.cancel()
+        autoScaleJob = null
 
         // Reset browser quality metrics so stale values don't affect next session
         lastQualityDroppedFrames = 0
@@ -3354,6 +3377,7 @@ class MirrorForegroundService : Service() {
                 videoEncoder = null
                 jpegEncoder?.release()
                 jpegEncoder = null
+                fmp4Muxer = null
 
                 val jpeg = JpegEncoder(
                     width,
@@ -3369,15 +3393,16 @@ class MirrorForegroundService : Service() {
             } else {
                 videoEncoder?.release()
                 videoEncoder = null
+                // Drop any muxer from a previous resolution/mode so onSpsPps below
+                // rebuilds it with the new encoder's SPS/PPS.
+                fmp4Muxer = null
 
                 val encoder = VideoEncoder(width, height, currentBitrate, thermalFpsOverride ?: currentFps)
                 val encoderSurface = encoder.createInputSurface()
                 currentEncoderSurface = encoderSurface
                 videoEncoder = encoder
 
-                encoder.onSpsPps = { spsPps -> mirrorServer?.broadcastSpsPps(spsPps) }
-                encoder.start { frameData, isKeyFrame -> mirrorServer?.broadcastFrame(frameData, isKeyFrame) }
-                mirrorServer?.setKeyframeRequester("primary") { encoder.requestKeyFrame() }
+                wireVideoEncoderRouting(encoder, width, height, thermalFpsOverride ?: currentFps, "primary", { fmp4Muxer }, { fmp4Muxer = it })
                 encoderSurface
             }
 
@@ -3471,10 +3496,101 @@ class MirrorForegroundService : Service() {
         }
     }
 
+    /**
+     * Split the combined SPS/PPS Annex-B bytes (each NALU carrying its 4-byte
+     * start code) emitted by [VideoEncoder.onSpsPps] into separate SPS and PPS
+     * byte arrays (still including their start codes, which [Fmp4Muxer] strips).
+     */
+    private fun splitSpsPps(combined: ByteArray): Pair<ByteArray, ByteArray> {
+        var spsStart = -1
+        var ppsStart = -1
+        var i = 0
+        while (i < combined.size - 3) {
+            if (combined[i] == 0.toByte() && combined[i + 1] == 0.toByte() &&
+                combined[i + 2] == 0.toByte() && combined[i + 3] == 1.toByte()
+            ) {
+                if (spsStart < 0) spsStart = i
+                else if (ppsStart < 0) {
+                    ppsStart = i
+                    break
+                }
+            }
+            i++
+        }
+        require(spsStart >= 0 && ppsStart > spsStart) { "Invalid SPS/PPS in codec config" }
+        return combined.copyOfRange(spsStart, ppsStart) to combined.copyOfRange(ppsStart, combined.size)
+    }
+
+    /**
+     * Wire a [VideoEncoder]'s output to either the raw-H264 broadcast path
+     * (WebCodecs clients) or the fMP4 muxer (MSE clients), depending on the
+     * active [currentCodecMode]. Shared by every encoder-setup site so the
+     * branching logic lives in one place.
+     */
+    private fun wireVideoEncoderRouting(
+        encoder: VideoEncoder,
+        width: Int,
+        height: Int,
+        fps: Int,
+        channel: String,
+        getMuxer: () -> Fmp4Muxer?,
+        setMuxer: (Fmp4Muxer?) -> Unit
+    ) {
+        encoder.onSpsPps = { spsPps ->
+            if (currentCodecMode == CodecModeTransition.MODE_FMP4) {
+                if (getMuxer() == null) {
+                    val (sps, pps) = splitSpsPps(spsPps)
+                    val muxer = Fmp4Muxer(
+                        sps, pps, width, height, fps,
+                        onInit = { init -> mirrorServer?.broadcastFmp4Init(init, channel) },
+                        onFragment = { frag, kf -> mirrorServer?.broadcastFrame(frag, kf, channel) }
+                    )
+                    setMuxer(muxer)
+                    val codec = muxer.codecString()
+                    mirrorServer?.broadcastControlMessage(
+                        JSONObject().apply {
+                            put("type", "streamCodec")
+                            put("codec", codec)
+                            put("channel", channel)
+                        }.toString()
+                    )
+                    Log.i(TAG, "fMP4 muxer created ($channel) codec=$codec")
+                }
+            } else {
+                mirrorServer?.broadcastSpsPps(spsPps, channel)
+            }
+        }
+        encoder.start { frameData, isKeyFrame ->
+            if (currentCodecMode == CodecModeTransition.MODE_FMP4) {
+                val muxer = getMuxer()
+                if (muxer != null) {
+                    muxer.addFrame(frameData.sliceArray(8 until frameData.size), isKeyFrame)
+                }
+                // else: drop frame until SPS/PPS (and thus the muxer) arrives
+            } else {
+                mirrorServer?.broadcastFrame(frameData, isKeyFrame, channel)
+            }
+        }
+        mirrorServer?.setKeyframeRequester(channel) { encoder.requestKeyFrame() }
+    }
+
     private fun onCodecModeRequest(mode: String) {
-        if (!CodecModeTransition.shouldApply(mode, currentCodecMode, jpegEncoder != null)) return
-        currentCodecMode = CodecModeTransition.MODE_MJPEG
-        Log.i(TAG, "Codec mode request: mjpeg — delegating to rebuildPipeline")
+        val requested = when (mode) {
+            "mjpeg" -> CodecModeTransition.MODE_MJPEG
+            "fmp4" -> CodecModeTransition.MODE_FMP4
+            else -> {
+                Log.w(TAG, "Ignoring unsupported codec mode request: $mode")
+                return
+            }
+        }
+        val requestedActive = if (requested == CodecModeTransition.MODE_MJPEG) {
+            jpegEncoder != null
+        } else {
+            fmp4Muxer != null
+        }
+        if (!CodecModeTransition.shouldApply(requested, currentCodecMode, requestedActive)) return
+        currentCodecMode = requested
+        Log.i(TAG, "Codec mode request: $requested — delegating to rebuildPipeline")
         serviceScope.launch {
             try {
                 rebuildPipeline(currentWidth, currentHeight, force = true)
@@ -3482,7 +3598,7 @@ class MirrorForegroundService : Service() {
                     rebuildSecondaryPipeline(secondaryWidth, secondaryHeight)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to switch codec to mjpeg", e)
+                Log.e(TAG, "Failed to switch codec to $requested", e)
             }
         }
     }

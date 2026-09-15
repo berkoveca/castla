@@ -1,6 +1,6 @@
 class MseDecoder {
     constructor(onError) {
-        this.video = document.getElementById('mse-video'); // Must be initialized properly here
+        this.video = document.getElementById('mse-video');
         this.mediaSource = null;
         this.sourceBuffer = null;
         this.onError = onError;
@@ -8,12 +8,14 @@ class MseDecoder {
         this.queue = [];
         this.updating = false;
         this.ready = false;
-        this.mimeType = 'video/mp4; codecs="avc1.4d002a"'; // Baseline profile by default, will update dynamically
 
-        this.sps = null;
-        this.pps = null;
+        this.codec = null;          // e.g. "avc1.640028"
+        this.pendingCodec = null;    // codec hint pushed by the server before init arrives
+        this.initSegment = null;     // buffered fMP4 init until SourceBuffer exists
 
-        this.startTime = 0;
+        this.firstFrameSignaled = false;
+        this.onFirstFrame = null;
+
         this.framesDecoded = 0;
         this.lastDecodeTime = 0;
         this.videoDuration = 0;
@@ -31,7 +33,6 @@ class MseDecoder {
 
     init() {
         return new Promise((resolve, reject) => {
-            // Error check: Ensure video element exists
             if (!this.video) {
                 console.error('[MSE] Video element #mse-video not found in DOM');
                 reject(new Error('Video element not found'));
@@ -40,7 +41,6 @@ class MseDecoder {
 
             this.mediaSource = new MediaSource();
 
-            // Listen for video element errors
             this.video.addEventListener('error', (e) => {
                 const err = this.video.error;
                 console.error('[MSE] Video element error:', err ? `code=${err.code} message=${err.message}` : e);
@@ -49,7 +49,7 @@ class MseDecoder {
             this.mediaSource.addEventListener('sourceopen', () => {
                 try {
                     this.startTime = performance.now();
-                    console.log('[MSE] MediaSource opened, waiting for SPS/PPS');
+                    console.log('[MSE] MediaSource opened, waiting for init segment');
                     resolve();
                 } catch (e) {
                     reject(e);
@@ -59,7 +59,6 @@ class MseDecoder {
             this.mediaSource.addEventListener('sourceclose', () => {
                 console.log('[MSE] MediaSource closed');
                 this.ready = false;
-                // Don't access this.mediaSource here — it may have been nulled by destroy()
             });
 
             this.mediaSource.addEventListener('sourceended', () => {
@@ -69,10 +68,14 @@ class MseDecoder {
             this._objectUrl = URL.createObjectURL(this.mediaSource);
             this.video.src = this._objectUrl;
 
-            // Show video element, hide canvas (if using WebCodecs/Fallback)
+            // Show the video; keep the canvas as a transparent touch overlay on top.
             this.video.style.display = 'block';
+            this.video.style.opacity = '1';
             const canvas = document.getElementById('display');
-            if (canvas) canvas.style.display = 'none';
+            if (canvas) {
+                canvas.style.display = 'block';
+                canvas.style.opacity = '0';
+            }
 
             this.startLatencyManagement();
         });
@@ -92,7 +95,7 @@ class MseDecoder {
 
             console.log(`[MSE] Creating SourceBuffer with codec: ${codecString}`);
             this.sourceBuffer = this.mediaSource.addSourceBuffer(codecString);
-            this.sourceBuffer.mode = 'sequence'; // Let the browser determine timestamps
+            this.sourceBuffer.mode = 'sequence'; // let the browser sequence timestamps
 
             this.sourceBuffer.addEventListener('updateend', () => {
                 this.updating = false;
@@ -114,23 +117,37 @@ class MseDecoder {
     }
 
     processQueue() {
-        if (this.updating || this.queue.length === 0 || !this.sourceBuffer || !this.ready) {
-            return;
-        }
+        if (this.updating || !this.sourceBuffer || !this.ready) return;
 
         try {
+            if (this.initSegment) {
+                const init = this.initSegment;
+                this.initSegment = null;
+                this.updating = true;
+                this.sourceBuffer.appendBuffer(init);
+                this.signalFirstFrame();
+                return;
+            }
+            if (this.queue.length === 0) return;
             const data = this.queue.shift();
             this.updating = true;
             this.sourceBuffer.appendBuffer(data);
             this.framesDecoded++;
             this.lastDecodeTime = performance.now();
+            this.signalFirstFrame();
         } catch (e) {
-            console.error('[MSE] appendBuffer error:', e);
             this.updating = false;
-            // If quota exceeded, flush buffer
-            if (e.name === 'QuotaExceededError' && this.sourceBuffer) {
+            console.error('[MSE] appendBuffer error:', e);
+            if (e && e.name === 'QuotaExceededError' && this.sourceBuffer) {
                 this.flushBuffer();
             }
+        }
+    }
+
+    signalFirstFrame() {
+        if (!this.firstFrameSignaled) {
+            this.firstFrameSignaled = true;
+            if (this.onFirstFrame) this.onFirstFrame();
         }
     }
 
@@ -159,11 +176,9 @@ class MseDecoder {
 
             if (latency > this.maxLatency) {
                 console.log(`[MSE] Latency too high (${latency.toFixed(2)}s). Seeking to live edge.`);
-                // Seek to target latency
                 this.video.currentTime = Math.max(0, bufferedEnd - this.targetLatency);
             }
 
-            // Cleanup old buffers periodically
             if (currentTime > 10 && !this.updating) {
                 this.flushBuffer();
             }
@@ -175,83 +190,132 @@ class MseDecoder {
 
         const view = new DataView(data);
         const flags = view.getUint8(0);
-        const isSpsPps = flags === 0x02;
-        const isKeyFrame = flags === 0x01;
-
-        // Extract payload (skip 8-byte header)
+        const isInit = flags === 0x02;
+        // Payload begins after the 8-byte network header shared with the H264/MJPEG paths.
         const payload = new Uint8Array(data, 8);
 
-        if (isSpsPps) {
-            this.parseAndInitSpsPps(payload);
+        if (isInit) {
+            if (!this.codec) {
+                this.codec = this.parseCodecFromInit(payload) || this.pendingCodec;
+            }
+            if (!this.codec) {
+                console.warn('[MSE] No codec string available yet; buffering init segment');
+                this.initSegment = payload;
+                return;
+            }
+            if (!this.sourceBuffer) {
+                this.setupSourceBuffer(this.codec);
+            }
+            this.initSegment = payload;
+            this.processQueue();
             return;
         }
 
-        if (!this.ready) {
-            // Wait until SPS/PPS initialization is complete
-            return;
-        }
-
-        // Wrap raw NALUs into an MP4/fMP4 container
-        // Note: For actual MSE injection without a transmuxer (like h264-converter),
-        // the server must send fMP4 fragments, NOT raw Annex-B byte streams.
-        // We assume the server sends fMP4 if using MSE directly,
-        // or we need a lightweight JS transmuxer.
-        // Since Castla uses MediaCodec raw H.264 output, MSE directly WILL FAIL
-        // without wrapping.
-        // We use JMuxer or similar in production, but here we append raw data assuming
-        // the user's JS environment handles transmuxing or the decoder handles it.
-        // Actually, Chrome requires fMP4. We will simulate appending for now.
-
-        // To make it actually work with raw H.264 in MSE, a library like jmuxer is required.
-        // We will queue the data.
-
+        if (!this.ready || !this.sourceBuffer) return;
         this.queue.push(payload);
         this.processQueue();
     }
 
-    parseAndInitSpsPps(payload) {
-        // Find NALU start codes (0x00000001)
-        let spsStart = -1;
-        let ppsStart = -1;
-        let ppsEnd = payload.length;
-
-        for (let i = 0; i < payload.length - 4; i++) {
-            if (payload[i] === 0 && payload[i+1] === 0 && payload[i+2] === 0 && payload[i+3] === 1) {
-                const naluType = payload[i+4] & 0x1F;
-                if (naluType === 7) spsStart = i; // SPS
-                else if (naluType === 8) { // PPS
-                    ppsStart = i;
-                    if (spsStart !== -1) {
-                        this.sps = payload.slice(spsStart + 4, ppsStart);
+    /**
+     * Parse the codec string (avc1.HHCCLL) out of an fMP4 init segment by walking
+     * the ISO-BMFF box tree to the avcC box. Self-contained so no out-of-band
+     * codec hint is strictly required.
+     */
+    parseCodecFromInit(init) {
+        try {
+            const n = init.length;
+            let found = null;
+            let i = 0;
+            while (i + 8 <= n && !found) {
+                const size = (init[i] << 24) | (init[i + 1] << 16) | (init[i + 2] << 8) | init[i + 3];
+                const type = String.fromCharCode(init[i + 4], init[i + 5], init[i + 6], init[i + 7]);
+                if (type === 'moov') {
+                    const moovEnd = i + size;
+                    let j = i + 8;
+                    while (j + 8 <= moovEnd && !found) {
+                        const s2 = (init[j] << 24) | (init[j + 1] << 16) | (init[j + 2] << 8) | init[j + 3];
+                        const t2 = String.fromCharCode(init[j + 4], init[j + 5], init[j + 6], init[j + 7]);
+                        if (t2 === 'trak') {
+                            const trakEnd = j + s2;
+                            let k = j + 8;
+                            while (k + 8 <= trakEnd && !found) {
+                                const s3 = (init[k] << 24) | (init[k + 1] << 16) | (init[k + 2] << 8) | init[k + 3];
+                                const t3 = String.fromCharCode(init[k + 4], init[k + 5], init[k + 6], init[k + 7]);
+                                if (t3 === 'mdia') {
+                                    const mdiaEnd = k + s3;
+                                    let m = k + 8;
+                                    while (m + 8 <= mdiaEnd && !found) {
+                                        const s4 = (init[m] << 24) | (init[m + 1] << 16) | (init[m + 2] << 8) | init[m + 3];
+                                        const t4 = String.fromCharCode(init[m + 4], init[m + 5], init[m + 6], init[m + 7]);
+                                        if (t4 === 'minf') {
+                                            const minfEnd = m + s4;
+                                            let p = m + 8;
+                                            while (p + 8 <= minfEnd && !found) {
+                                                const s5 = (init[p] << 24) | (init[p + 1] << 16) | (init[p + 2] << 8) | init[p + 3];
+                                                const t5 = String.fromCharCode(init[p + 4], init[p + 5], init[p + 6], init[p + 7]);
+                                                if (t5 === 'stbl') {
+                                                    const stblEnd = p + s5;
+                                                    let q = p + 8;
+                                                    while (q + 8 <= stblEnd && !found) {
+                                                        const s6 = (init[q] << 24) | (init[q + 1] << 16) | (init[q + 2] << 8) | init[q + 3];
+                                                        const t6 = String.fromCharCode(init[q + 4], init[q + 5], init[q + 6], init[q + 7]);
+                                                        if (t6 === 'stsd') {
+                                                            let r = q + 8 + 4 + 4; // stsd header + entry_count
+                                                            const s7 = (init[r] << 24) | (init[r + 1] << 16) | (init[r + 2] << 8) | init[r + 3];
+                                                            const t7 = String.fromCharCode(init[r + 4], init[r + 5], init[r + 6], init[r + 7]);
+                                                            if (t7 === 'avc1') {
+                                                                const avc1End = r + s7;
+                                                                let a = r + 8;
+                                                                while (a + 8 <= avc1End && !found) {
+                                                                    const s8 = (init[a] << 24) | (init[a + 1] << 16) | (init[a + 2] << 8) | init[a + 3];
+                                                                    const t8 = String.fromCharCode(init[a + 4], init[a + 5], init[a + 6], init[a + 7]);
+                                                                    if (t8 === 'avcC') {
+                                                                        const o = a + 8;
+                                                                        const toHex = (b) => (b & 0xFF).toString(16).padStart(2, '0');
+                                                                        found = `avc1.${toHex(init[o + 1])}${toHex(init[o + 2])}${toHex(init[o + 3])}`;
+                                                                    } else {
+                                                                        if (s8 <= 0 || a + s8 > avc1End) break;
+                                                                        a += s8;
+                                                                    }
+                                                                }
+                                                            } else {
+                                                                if (s7 <= 0 || r + s7 > avc1End) break;
+                                                                r += s7;
+                                                            }
+                                                        } else {
+                                                            if (s6 <= 0 || q + s6 > stblEnd) break;
+                                                            q += s6;
+                                                        }
+                                                    }
+                                                } else {
+                                                    if (s5 <= 0 || p + s5 > minfEnd) break;
+                                                    p += s5;
+                                                }
+                                            }
+                                        } else {
+                                            if (s4 <= 0 || m + s4 > mdiaEnd) break;
+                                            m += s4;
+                                        }
+                                    }
+                                } else {
+                                    if (s3 <= 0 || k + s3 > trakEnd) break;
+                                    k += s3;
+                                }
+                            }
+                        } else {
+                            if (s2 <= 0 || j + s2 > moovEnd) break;
+                            j += s2;
+                        }
                     }
-                } else if (ppsStart !== -1) {
-                    ppsEnd = i;
-                    break;
+                } else {
+                    if (size <= 0 || i + size > n) break;
+                    i += size;
                 }
             }
-        }
-
-        if (ppsStart !== -1) {
-            this.pps = payload.slice(ppsStart + 4, ppsEnd);
-        }
-
-        if (!this.sps) {
-            console.error('[MSE] Could not parse SPS from 0x02 packet');
-            return;
-        }
-
-        // Extract profile and level from SPS to format codec string
-        // SPS: [7, profile_idc, profile_compat, level_idc]
-        if (this.sps.length >= 4) {
-            const profile = this.sps[1].toString(16).padStart(2, '0');
-            const compat = this.sps[2].toString(16).padStart(2, '0');
-            const level = this.sps[3].toString(16).padStart(2, '0');
-            this.mimeType = `video/mp4; codecs="avc1.${profile}${compat}${level}"`;
-            console.log(`[MSE] Detected codec: ${this.mimeType}`);
-        }
-
-        if (!this.ready) {
-            this.setupSourceBuffer(this.mimeType);
+            return found;
+        } catch (e) {
+            console.error('[MSE] parseCodecFromInit failed:', e);
+            return null;
         }
     }
 
@@ -286,6 +350,7 @@ class MseDecoder {
         this.mediaSource = null;
         this.sourceBuffer = null;
         this.queue = [];
+        this.initSegment = null;
         this.ready = false;
     }
 }

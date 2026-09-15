@@ -5,17 +5,30 @@ import android.content.SharedPreferences
 
 enum class MirroringMode { FULL_SCREEN, APP }
 
+/**
+ * Selectable streaming transport.
+ * - AUTO: client picks the smoothest decoder it supports (WebCodecs H264 -> MSE H264 -> MJPEG)
+ * - WEBCODECS: force H264 via WebCodecs (modern browsers)
+ * - MJPEG: force JPEG fallback (legacy / debugging)
+ * - MSE: force H264 packaged as fragmented MP4 over Media Source Extensions
+ *   (the path that makes Tesla MCU2 Chromium 88 play smoothly via hardware H264 decode)
+ */
+enum class StreamingMode { AUTO, WEBCODECS, MJPEG, MSE }
+
 data class StreamSettings(
     val maxResolution: Resolution = Resolution.AUTO,
     val fps: Int = FPS_AUTO,
     val audioEnabled: Boolean = false,
     val mirroringMode: MirroringMode = MirroringMode.FULL_SCREEN,
     val targetAppPackage: String = "",
-    val targetAppLabel: String = ""
+    val targetAppLabel: String = "",
+    val streamingMode: StreamingMode = StreamingMode.AUTO
 ) {
     enum class Resolution(val maxHeight: Int, val label: String) {
         AUTO(720, "Auto"),
         RES_720(720, "720p (Normal)"),
+        RES_800(800, "800p (Tesla 1280x800)"),
+        RES_960(960, "960p (Tesla 1536x960)"),
         RES_1080(1080, "1080p (High)"),
         RES_1200(1200, "1200p (Tesla 1920x1200)");
     }
@@ -34,6 +47,7 @@ data class StreamSettings(
         private const val KEY_MIRRORING_MODE = "mirroring_mode"
         private const val KEY_TARGET_APP_PACKAGE = "target_app_package"
         private const val KEY_TARGET_APP_LABEL = "target_app_label"
+        private const val KEY_STREAMING_MODE = "streaming_mode"
 
         /** Sentinel value indicating auto FPS mode. Must not collide with real FPS values. */
         const val FPS_AUTO = 0
@@ -56,7 +70,10 @@ data class StreamSettings(
                     MirroringMode.valueOf(prefs.getString(KEY_MIRRORING_MODE, MirroringMode.FULL_SCREEN.name)!!)
                 } catch (_: Exception) { MirroringMode.FULL_SCREEN },
                 targetAppPackage = prefs.getString(KEY_TARGET_APP_PACKAGE, "") ?: "",
-                targetAppLabel = prefs.getString(KEY_TARGET_APP_LABEL, "") ?: ""
+                targetAppLabel = prefs.getString(KEY_TARGET_APP_LABEL, "") ?: "",
+                streamingMode = try {
+                    StreamingMode.valueOf(prefs.getString(KEY_STREAMING_MODE, StreamingMode.AUTO.name)!!)
+                } catch (_: Exception) { StreamingMode.AUTO }
             )
         }
 
@@ -68,6 +85,7 @@ data class StreamSettings(
                 .putString(KEY_MIRRORING_MODE, settings.mirroringMode.name)
                 .putString(KEY_TARGET_APP_PACKAGE, settings.targetAppPackage)
                 .putString(KEY_TARGET_APP_LABEL, settings.targetAppLabel)
+                .putString(KEY_STREAMING_MODE, settings.streamingMode.name)
                 .apply()
         }
     }

@@ -13,11 +13,13 @@ object CodecModeTransition {
 
     const val MODE_H264 = "h264"
     const val MODE_MJPEG = "mjpeg"
+    const val MODE_FMP4 = "fmp4"
 
     /**
      * @param requestedMode mode string carried by the client control message
      * @param currentMode the service's currently active codec mode
-     * @param jpegEncoderActive whether a JpegEncoder is already live
+     * @param jpegEncoderActive whether the pipeline for the *requested* mode is already live
+     *                          (JpegEncoder for mjpeg, Fmp4Muxer for fmp4)
      * @return true if the service should apply the switch (set mode + rebuild)
      */
     fun shouldApply(
@@ -25,8 +27,9 @@ object CodecModeTransition {
         currentMode: String,
         jpegEncoderActive: Boolean
     ): Boolean {
-        if (requestedMode != MODE_MJPEG) return false
-        if (currentMode == MODE_MJPEG && jpegEncoderActive) return false
+        val switchable = requestedMode == MODE_MJPEG || requestedMode == MODE_FMP4
+        if (!switchable) return false
+        if (requestedMode == currentMode) return !jpegEncoderActive
         return true
     }
 }

@@ -19,3 +19,6 @@ keystore.properties
 *.jks
 *.aab
 *.apk
+
+# Session backups (local only, do not commit)
+/.session-backup/

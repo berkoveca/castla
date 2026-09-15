@@ -52,6 +52,11 @@
     <string name="thermal_warning_emergency">Device is overheating — audio disabled, quality at minimum</string>
     <string name="settings_max_resolution">Max Resolution</string>
     <string name="settings_frame_rate">Frame Rate</string>
+    <string name="settings_streaming_mode">Streaming Mode</string>
+    <string name="settings_stream_auto">Auto</string>
+    <string name="settings_stream_webcodecs">WebCodecs (H.264)</string>
+    <string name="settings_stream_mjpeg">MJPEG</string>
+    <string name="settings_stream_mse">MSE H.264</string>
     <string name="settings_audio_experimental">Audio (Experimental)</string>
     <string name="settings_stream_device_audio">Stream device audio</string>
     <string name="settings_audio_description">Requires Android 10+. Captures system output.</string>
@@ -62,6 +67,8 @@
     <string name="settings_app_mode">App: %s</string>
     <string name="settings_res_auto">Auto</string>
     <string name="settings_res_720">720p (Normal)</string>
+    <string name="settings_res_800">800p (Tesla 1280x800)</string>
+    <string name="settings_res_960">960p (Tesla 1536x960)</string>
     <string name="settings_res_1080">1080p (High)</string>
     <string name="settings_res_1200">1200p (Tesla)</string>
     <string name="settings_fps_auto">Auto</string>

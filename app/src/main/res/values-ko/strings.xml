@@ -55,6 +55,11 @@
     <string name="thermal_warning_emergency">기기가 과열되었습니다 — 오디오 비활성화, 최저 화질로 전환</string>
     <string name="settings_max_resolution">최대 해상도</string>
     <string name="settings_frame_rate">프레임 레이트</string>
+    <string name="settings_streaming_mode">스트리밍 모드</string>
+    <string name="settings_stream_auto">자동</string>
+    <string name="settings_stream_webcodecs">WebCodecs (H.264)</string>
+    <string name="settings_stream_mjpeg">MJPEG</string>
+    <string name="settings_stream_mse">MSE H.264</string>
     <string name="settings_audio_experimental">오디오 (실험적)</string>
     <string name="settings_stream_device_audio">기기 오디오 스트리밍</string>
     <string name="settings_audio_description">Android 10 이상 필요. 시스템 출력을 캡처합니다.</string>
@@ -65,6 +70,8 @@
     <string name="settings_app_mode">앱: %s</string>
     <string name="settings_res_auto">자동</string>
     <string name="settings_res_720">720p (일반)</string>
+    <string name="settings_res_800">800p (Tesla 1280x800)</string>
+    <string name="settings_res_960">960p (Tesla 1536x960)</string>
     <string name="settings_res_1080">1080p (고화질)</string>
     <string name="settings_res_1200">1200p</string>
     <string name="settings_fps_auto">자동</string>

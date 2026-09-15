@@ -17,6 +17,12 @@ let framePacer = null;
 let secondaryFramePacer = null;
 let currentPrimaryApp = null;
 let isLauncherMode = true; // start in launcher mode
+
+// Streaming mode resolved at startup: "auto" | "webcodecs" | "mjpeg" | "mse".
+// `serverStreamingMode` is pushed by the app; `mseCodecString` carries the
+// avc1.xxxx codec hint for the MSE SourceBuffer.
+let serverStreamingMode = null;
+let mseCodecString = null;
 let launchGuardUntil = 0; // block accidental launches after splash dismiss
 let codecMode = 'h264'; // Default to h264, switch to mjpeg if needed
 
@@ -836,8 +842,55 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateSplitFitButton();
     hideOverlay();
 
+    function resolveStreamingMode() {
+        const params = new URLSearchParams(location.search);
+        const urlMode = params.get('mode');
+        let mode = urlMode || serverStreamingMode || 'auto';
+        if (mode === 'auto' || !mode) {
+            if (typeof WebCodecs !== 'undefined' || window.VideoDecoder) return 'webcodecs';
+            if (MseDecoder.isSupported()) return 'mse';
+            return 'mjpeg';
+        }
+        // Explicit mode — validate support, else gracefully fall back.
+        if (mode === 'webcodecs') return (typeof WebCodecs !== 'undefined' || window.VideoDecoder) ? 'webcodecs' : (MseDecoder.isSupported() ? 'mse' : 'mjpeg');
+        if (mode === 'mse') return MseDecoder.isSupported() ? 'mse' : 'mjpeg';
+        return 'mjpeg';
+    }
+
+    function waitForStreamingMode(timeoutMs) {
+        return new Promise((resolve) => {
+            if (serverStreamingMode) return resolve();
+            const start = Date.now();
+            const iv = setInterval(() => {
+                if (serverStreamingMode || Date.now() - start > timeoutMs) {
+                    clearInterval(iv);
+                    resolve();
+                }
+            }, 50);
+        });
+    }
+
     async function initDecoder() {
         console.log('[Main] Initializing decoders...');
+        const mode = resolveStreamingMode();
+
+        if (mode === 'mse') {
+            console.log('[Main] Using MSE H264 decoder (fMP4 over Media Source)');
+            const mseVideo = document.getElementById('mse-video');
+            if (mseVideo) mseVideo.style.display = 'block';
+            decoder = new MseDecoder((error) => console.error('[Main] MSE error:', error));
+            decoder.onFirstFrame = () => {
+                if (!firstFrameReceived) { firstFrameReceived = true; checkReady(); }
+            };
+            await decoder.init();
+            codecMode = 'fmp4';
+            if (mseCodecString) decoder.pendingCodec = mseCodecString;
+            applyActiveFitModes();
+            if (controlSocket && controlSocket.readyState === WebSocket.OPEN) {
+                controlSocket.send(JSON.stringify({ type: 'codec', mode: 'fmp4' }));
+            }
+            return;
+        }
 
         if (typeof WebCodecs !== 'undefined' || window.VideoDecoder) {
             console.log('[Main] Using WebCodecs Decoder');
@@ -933,8 +986,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (firstFrameReceived) {
             clearLaunchTimeout();
             const mseVideo = document.getElementById('mse-video');
-            canvas.style.opacity = '1';
-            if (mseVideo) mseVideo.style.opacity = '0';
+            if (codecMode === 'fmp4') {
+                // MSE path: show the <video>, keep the canvas as a transparent
+                // touch overlay so input still routes through the touch handler.
+                if (mseVideo) { mseVideo.style.opacity = '1'; mseVideo.style.display = 'block'; }
+                canvas.style.opacity = '0';
+            } else {
+                canvas.style.opacity = '1';
+                if (mseVideo) mseVideo.style.opacity = '0';
+            }
             hideOverlay();
             if (decoder && decoder.play) {
                 decoder.play();
@@ -1181,6 +1241,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                     ottProfileActive = !!msg.active;
                     refreshEffectiveProfile();
                     console.log(`[Profile] OTT hint: active=${ottProfileActive}`);
+                } else if (msg.type === 'streamingMode') {
+                    serverStreamingMode = msg.mode;
+                } else if (msg.type === 'streamCodec') {
+                    mseCodecString = msg.codec;
                 } else if (msg.type === 'autoTierChange') {
                     const tier = msg.tier;
                     const reason = msg.reason;
@@ -1603,19 +1667,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     try {
+        // Open the control socket first so the server's streamingMode preference
+        // (and our codec request) reach each side before the video stream starts.
+        connectControl();
+        await waitForControlSocketOpen(2000);
+        await waitForStreamingMode(800);
         await initDecoder();
-        if (codecMode === 'mjpeg') {
-            // Open the control socket first so the `codec: mjpeg` preference
-            // reaches the server before the video socket starts streaming.
-            // Otherwise the server ships H.264 until it processes the switch,
-            // which an MJPEG decoder can't render.
-            connectControl();
-            await waitForControlSocketOpen(2000);
-            connectVideo();
-        } else {
-            connectVideo();
-            connectControl();
-        }
+        connectVideo();
     } catch (e) {
         setStatus(e.message, 'error');
         showOverlay();

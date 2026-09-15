@@ -330,4 +330,25 @@ class StreamMathTest {
         // Never zero for a bad tier value
         assertEquals(1, StreamMath.mjpegFpsForTier(0))
     }
+
+    // ── New Tesla 16:10 tiers ──
+
+    @Test
+    fun `800p Tesla tier 1280x800 stays under smooth decode budget`() {
+        val (w, h) = StreamMath.capToDecodeBudget(1280, 800, StreamMath.mjpegBudgetFor(false))
+        assertEquals(1280, w)
+        assertEquals(800, h)
+        assertTrue(w.toLong() * h <= StreamMath.MJPEG_SMOOTH_BUDGET_PIXELS)
+        // 16:10 aspect preserved
+        assertEquals(1.6, w.toDouble() / h, 0.001)
+    }
+
+    @Test
+    fun `960p Tesla tier 1536x960 fits within video budget and preserves 16-10`() {
+        val (w, h) = StreamMath.capToDecodeBudget(1536, 960, StreamMath.MJPEG_VIDEO_BUDGET_PIXELS)
+        assertEquals(1536, w)
+        assertEquals(960, h)
+        assertTrue(w.toLong() * h <= StreamMath.MJPEG_VIDEO_BUDGET_PIXELS)
+        assertEquals(1.6, w.toDouble() / h, 0.001)
+    }
 }

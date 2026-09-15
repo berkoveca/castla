@@ -260,6 +260,27 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         deadSockets.forEach { unregisterVideoSocket(channel, it) }
     }
 
+    /**
+     * Send an fMP4 init segment to the video sockets. Uses the same 8-byte header
+     * as [broadcastSpsPps] with flag 0x02 so the client's MSE decoder can tell an
+     * init segment apart from media fragments (flag 0x01/0x00).
+     */
+    fun broadcastFmp4Init(data: ByteArray, channel: String = "primary") {
+        val buffer = ByteArray(8 + data.size)
+        fillVideoHeader(buffer, 0x02, 0)
+        System.arraycopy(data, 0, buffer, 8, data.size)
+        val sockets = if (channel == "secondary") secondaryVideoSockets else primaryVideoSockets
+        val deadSockets = mutableListOf<VideoStreamSocket>()
+        for (socket in sockets) {
+            try {
+                socket.sendBinary(buffer)
+            } catch (e: Exception) {
+                deadSockets.add(socket)
+            }
+        }
+        deadSockets.forEach { unregisterVideoSocket(channel, it) }
+    }
+
     fun broadcastFrame(data: ByteArray, isKeyFrame: Boolean, channel: String = "primary") {
         val seq = if (channel == "secondary") ++secondaryFrameSeqNum else ++primaryFrameSeqNum
         val flags: Byte = if (isKeyFrame) 0x01 else 0x00

@@ -52,6 +52,11 @@
     <string name="thermal_warning_emergency">デバイスが過熱しています — オーディオ無効化、最低画質に変更</string>
     <string name="settings_max_resolution">最大解像度</string>
     <string name="settings_frame_rate">フレームレート</string>
+    <string name="settings_streaming_mode">ストリーミングモード</string>
+    <string name="settings_stream_auto">自動</string>
+    <string name="settings_stream_webcodecs">WebCodecs (H.264)</string>
+    <string name="settings_stream_mjpeg">MJPEG</string>
+    <string name="settings_stream_mse">MSE H.264</string>
     <string name="settings_audio_experimental">オーディオ（実験的）</string>
     <string name="settings_stream_device_audio">デバイスオーディオをストリーミング</string>
     <string name="settings_audio_description">Android 10以上が必要。システム出力をキャプチャします。</string>
@@ -63,6 +68,8 @@
     <string name="settings_res_auto">自動</string>
     <string name="settings_fps_auto">自動</string>
     <string name="settings_res_720">720p（標準）</string>
+    <string name="settings_res_800">800p (Tesla 1280x800)</string>
+    <string name="settings_res_960">960p (Tesla 1536x960)</string>
     <string name="settings_res_1080">1080p（高画質）</string>
     <string name="settings_res_1200">1200p</string>
 

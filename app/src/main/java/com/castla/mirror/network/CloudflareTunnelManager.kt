@@ -44,6 +44,12 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         private const val START_TIMEOUT_MS = 60_000L
         private const val MAX_RESTART_RETRIES = 5
         private const val RESTART_BASE_DELAY_MS = 3_000L
+        // Bounded retries for an INITIAL start that fails before ever registering
+        // (transient DNS/network blip). Auto-restart (below) covers drops AFTER a
+        // tunnel registered; this covers never-connecting cases so a one-off
+        // outage doesn't leave mirroring permanently dead until a manual retry.
+        private const val MAX_INITIAL_START_RETRIES = 3
+        private const val INITIAL_START_BASE_DELAY_MS = 2_000L
 
         /**
          * App-wide singleton so a running cloudflared process + `*.trycloudflare.com`
@@ -67,6 +73,7 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
     @Volatile private var registered = false
     private var lastLocalPort: Int = 9090
     private var restartCount: Int = 0
+    private var initialStartRetries: Int = 0
     private var restartJob: Job? = null
     @Volatile private var intentionalStop = false
 
@@ -119,8 +126,8 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
             kotlinx.coroutines.delay(START_TIMEOUT_MS)
             if (_isStarting.value && !_isRunning.value) {
                 Log.w(TAG, "Tunnel start timed out after ${START_TIMEOUT_MS}ms")
-                _error.value = failureMessage("cloudflared did not report a tunnel within ${START_TIMEOUT_MS / 1000}s")
                 _isStarting.value = false
+                scheduleInitialStartRetry("cloudflared did not report a tunnel within ${START_TIMEOUT_MS / 1000}s")
             }
         }
 
@@ -155,6 +162,7 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         downloadJob?.cancel()
         startTimeoutJob?.cancel()
         registered = false
+        initialStartRetries = 0
         readerThread?.interrupt()
         readerThread = null
 
@@ -215,6 +223,7 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
             val url = urlMatch.value
             Log.i(TAG, "Tunnel URL: $url ($stream)")
             restartCount = 0
+            initialStartRetries = 0
             restartJob?.cancel()
             _tunnelUrl.value = url
             _isRunning.value = true
@@ -226,6 +235,7 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         ) {
             registered = true
             restartCount = 0
+            initialStartRetries = 0
             restartJob?.cancel()
             Log.i(TAG, "Named tunnel connection registered ($stream)")
             _isRunning.value = true
@@ -306,7 +316,7 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                     _error.value = null
                     scheduleAutoRestart("SSL/network dropped the tunnel")
                 } else {
-                    _error.value = failureMessage("cloudflared exited without establishing a tunnel")
+                    scheduleInitialStartRetry("cloudflared exited without establishing a tunnel")
                 }
                 _isStarting.value = false
             } catch (e: InterruptedException) {
@@ -317,6 +327,33 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                 _isStarting.value = false
             }
         }, "cloudflared-reader").also { it.isDaemon = true; it.start() }
+    }
+
+    /**
+     * Bounded retry for a tunnel that FAILED to start (never registered).
+     * Covers transient DNS/network blips at startup where there is nothing to
+     * "auto-restart" yet. Backs off then gives up with a clear error so the UI
+     * isn't stuck on "Starting…" — the user can retry manually after network
+     * recovery. [intentionalStop] suppresses retries.
+     */
+    private fun scheduleInitialStartRetry(reason: String) {
+        if (intentionalStop) return
+        if (initialStartRetries >= MAX_INITIAL_START_RETRIES) {
+            Log.w(TAG, "Giving up after ${MAX_INITIAL_START_RETRIES} initial-start attempts: $reason")
+            _error.value = failureMessage("Tunnel failed to start ($reason). Please check internet and retry.")
+            return
+        }
+        initialStartRetries++
+        val delay = INITIAL_START_BASE_DELAY_MS * initialStartRetries
+        Log.w(TAG, "Tunnel did not start ($reason) — retry $initialStartRetries in ${delay}ms")
+        restartJob?.cancel()
+        restartJob = scope.launch {
+            kotlinx.coroutines.delay(delay)
+            if (!intentionalStop && !_isRunning.value && !_isStarting.value) {
+                Log.i(TAG, "Retrying initial tunnel start (attempt $initialStartRetries)")
+                start(lastLocalPort)
+            }
+        }
     }
 
     /**
@@ -390,7 +427,7 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                 }
                 _isStarting.value = false
                 if (!registered) {
-                    _error.value = failureMessage("cloudflared exited before registering the named tunnel")
+                    scheduleInitialStartRetry("cloudflared exited before registering the named tunnel")
                 }
             } catch (e: InterruptedException) {
                 Log.d(TAG, "Reader thread interrupted")

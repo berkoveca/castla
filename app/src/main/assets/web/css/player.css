@@ -82,15 +82,21 @@ html, body {
     min-height: 0;
     opacity: 0;
     transition: opacity 0.3s;
+    position: relative;
+    z-index: 2; /* above #mse-video so touch input routes through the canvas */
 }
 
 #mse-video {
+    position: absolute;
+    inset: 0;
     width: 100%;
-    flex: 1;
-    min-height: 0;
+    height: 100%;
+    object-fit: contain;
+    background: #000;
     display: none;
     opacity: 0;
     transition: opacity 0.3s;
+    z-index: 1;
 }
 
 #overlay {

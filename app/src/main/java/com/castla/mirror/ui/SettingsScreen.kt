@@ -204,6 +204,8 @@ fun SettingsScreen(
                         val localizedLabel = when (res) {
                             StreamSettings.Resolution.AUTO -> stringResource(R.string.settings_res_auto)
                             StreamSettings.Resolution.RES_720 -> stringResource(R.string.settings_res_720)
+                            StreamSettings.Resolution.RES_800 -> stringResource(R.string.settings_res_800)
+                            StreamSettings.Resolution.RES_960 -> stringResource(R.string.settings_res_960)
                             StreamSettings.Resolution.RES_1080 -> stringResource(R.string.settings_res_1080)
                             StreamSettings.Resolution.RES_1200 -> stringResource(R.string.settings_res_1200)
                         }
@@ -212,6 +214,34 @@ fun SettingsScreen(
                             selected = settings.maxResolution == res,
                             onClick = {
                                 if (!isStreaming) onSettingsChanged(settings.copy(maxResolution = res))
+                            },
+                            enabled = !isStreaming
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Streaming mode
+            SettingSection(title = stringResource(R.string.settings_streaming_mode)) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    StreamingMode.entries.forEach { mode ->
+                        val localizedLabel = when (mode) {
+                            StreamingMode.AUTO -> stringResource(R.string.settings_stream_auto)
+                            StreamingMode.WEBCODECS -> stringResource(R.string.settings_stream_webcodecs)
+                            StreamingMode.MJPEG -> stringResource(R.string.settings_stream_mjpeg)
+                            StreamingMode.MSE -> stringResource(R.string.settings_stream_mse)
+                        }
+                        ModernOptionChip(
+                            text = localizedLabel,
+                            selected = settings.streamingMode == mode,
+                            onClick = {
+                                if (!isStreaming) onSettingsChanged(settings.copy(streamingMode = mode))
                             },
                             enabled = !isStreaming
                         )
@@ -621,6 +651,8 @@ fun SettingsScreen(
                     val resLabel = when (settings.maxResolution) {
                         StreamSettings.Resolution.AUTO -> stringResource(R.string.settings_res_auto)
                         StreamSettings.Resolution.RES_720 -> stringResource(R.string.settings_res_720)
+                        StreamSettings.Resolution.RES_800 -> stringResource(R.string.settings_res_800)
+                        StreamSettings.Resolution.RES_960 -> stringResource(R.string.settings_res_960)
                         StreamSettings.Resolution.RES_1080 -> stringResource(R.string.settings_res_1080)
                         StreamSettings.Resolution.RES_1200 -> stringResource(R.string.settings_res_1200)
                     }

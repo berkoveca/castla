@@ -85,9 +85,32 @@ class StreamSettingsTest {
         assertEquals(720, hd.maxHeight)
         assertTrue(hd.label.contains("720p"))
 
+        val tesla800 = StreamSettings.Resolution.RES_800
+        assertEquals(800, tesla800.maxHeight)
+        assertTrue(tesla800.label.contains("800p"))
+        assertTrue(tesla800.label.contains("Tesla"))
+
+        val tesla960 = StreamSettings.Resolution.RES_960
+        assertEquals(960, tesla960.maxHeight)
+        assertTrue(tesla960.label.contains("960p"))
+        assertTrue(tesla960.label.contains("Tesla"))
+
         val fhd = StreamSettings.Resolution.RES_1080
         assertEquals(1080, fhd.maxHeight)
         assertTrue(fhd.label.contains("1080p"))
+    }
+
+    @Test
+    fun `new Tesla tiers round-trip through preferences`() {
+        for (res in listOf(
+            StreamSettings.Resolution.RES_800,
+            StreamSettings.Resolution.RES_960
+        )) {
+            StreamSettings.save(context, StreamSettings(maxResolution = res, fps = 60))
+            val loaded = StreamSettings.load(context)
+            assertEquals(res, loaded.maxResolution)
+            assertEquals(60, loaded.fps)
+        }
     }
 
     @Test
