@@ -305,7 +305,11 @@ class PrivilegedService : IPrivilegedService.Stub() {
     override fun releaseVirtualDisplay(displayId: Int) {
         virtualDisplays.remove(displayId)?.let {
             virtualDisplayNames.remove(displayId)
-            it.release()
+            try {
+                it.release()
+            } catch (e: Exception) {
+                Log.w(TAG, "Virtual display release threw for id=$displayId", e)
+            }
             Log.i(TAG, "Virtual display released: id=$displayId")
         }
     }
@@ -798,8 +802,11 @@ class PrivilegedService : IPrivilegedService.Stub() {
     }
 
     override fun destroy() {
-        stopSystemAudioCapture()
-        virtualDisplays.values.forEach { it.release() }
+        try { stopSystemAudioCapture() } catch (_: Throwable) {}
+        try { setPhysicalDisplayPower(true) } catch (_: Throwable) {}
+        virtualDisplays.values.forEach { vd ->
+            try { vd.release() } catch (_: Throwable) {}
+        }
         virtualDisplays.clear()
         virtualDisplayNames.clear()
         Log.i(TAG, "PrivilegedService destroyed")
@@ -861,8 +868,8 @@ class PrivilegedService : IPrivilegedService.Stub() {
         try {
             token.linkToDeath({
                 Log.w(TAG, "Client died! Cleaning up PrivilegedService and killing VDs.")
-                destroy()
-                System.exit(0)
+                try { destroy() } catch (_: Throwable) {}
+                try { System.exit(0) } catch (_: Throwable) {}
             }, 0)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to link to death", e)

@@ -18,7 +18,14 @@ class CastlaApp : Application() {
             try {
                 com.castla.mirror.service.MirrorForegroundService.instance?.emergencyReleaseDisplays()
             } catch (_: Throwable) { }
-            previous?.uncaughtException(thread, throwable)
+            try {
+                previous?.uncaughtException(thread, throwable)
+            } catch (_: Throwable) {
+            }
+            try {
+                android.os.Process.killProcess(android.os.Process.myPid())
+            } catch (_: Throwable) {
+            }
         }
     }
 }

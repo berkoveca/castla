@@ -43,8 +43,9 @@ class VideoEncoder(
                 StreamMath.avcLevelFor(width, height),
                 "High"
             )
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.w(TAG, "High Profile failed, falling back to Baseline", e)
+            releaseQuietly()
             createEncoderWithProfile(
                 MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline,
                 StreamMath.avcLevelFor(width, height),
@@ -77,15 +78,47 @@ class VideoEncoder(
         }
 
         val encoder = MediaCodec.createEncoderByType(MIME_TYPE)
+        try {
+            encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            val surface = encoder.createInputSurface()
+            codec = encoder
+            Log.i(TAG, "Encoder created ($profileName): ${width}x${height} @ ${bitrate / 1000}kbps, ${fps}fps")
+            return surface
+        } catch (e: Throwable) {
+            Log.w(TAG, "configure($profileName) failed with extra keys — retrying stripped format", e)
+            try { encoder.stop() } catch (_: Throwable) {}
+            try { encoder.release() } catch (_: Throwable) {}
+            codec = null
+            return createEncoderWithProfileStripped(profile, level, profileName)
+        }
+    }
+
+    private fun createEncoderWithProfileStripped(profile: Int, level: Int, profileName: String): Surface {
+        val format = MediaFormat.createVideoFormat(MIME_TYPE, width, height).apply {
+            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+            setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
+            setInteger(MediaFormat.KEY_FRAME_RATE, fps)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, KEYFRAME_INTERVAL)
+            setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
+            setInteger(MediaFormat.KEY_PROFILE, profile)
+            setInteger(MediaFormat.KEY_LEVEL, level)
+        }
+        val encoder = MediaCodec.createEncoderByType(MIME_TYPE)
         encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         val surface = encoder.createInputSurface()
         codec = encoder
-
-        Log.i(TAG, "Encoder created ($profileName): ${width}x${height} @ ${bitrate / 1000}kbps, ${fps}fps")
+        Log.i(TAG, "Encoder created ($profileName, stripped): ${width}x${height} @ ${bitrate / 1000}kbps, ${fps}fps")
         return surface
     }
 
+    private fun releaseQuietly() {
+        try { codec?.stop() } catch (_: Throwable) {}
+        try { codec?.release() } catch (_: Throwable) {}
+        codec = null
+    }
+
     var onSpsPps: ((ByteArray) -> Unit)? = null
+    var onError: ((String) -> Unit)? = null
 
     fun start(onEncodedFrame: (data: ByteArray, isKeyFrame: Boolean) -> Unit) {
         val encoder = codec ?: throw IllegalStateException("Call createInputSurface() first")
@@ -130,14 +163,18 @@ class VideoEncoder(
                     }
 
                     codec.releaseOutputBuffer(index, false)
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     Log.e(TAG, "Error processing output buffer", e)
                     try { codec.releaseOutputBuffer(index, false) } catch (_: Exception) {}
+                    if (e is OutOfMemoryError || e is MediaCodec.CodecException) {
+                        onError?.invoke(e.javaClass.simpleName + ": " + (e.message ?: ""))
+                    }
                 }
             }
 
             override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) {
                 Log.e(TAG, "Encoder error", e)
+                onError?.invoke(e.diagnosticInfo ?: e.message ?: "CodecException")
             }
 
             override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {
@@ -145,8 +182,13 @@ class VideoEncoder(
             }
         }, encoderHandler)
 
-        encoder.start()
-        Log.i(TAG, "Encoder started")
+        try {
+            encoder.start()
+            Log.i(TAG, "Encoder started")
+        } catch (e: Throwable) {
+            Log.e(TAG, "Encoder start failed", e)
+            onError?.invoke(e.javaClass.simpleName + ": " + (e.message ?: "start failed"))
+        }
     }
 
     private fun extractSpsPps(buffer: ByteBuffer, info: MediaCodec.BufferInfo) {

@@ -1,7 +1,9 @@
 package com.castla.mirror.network
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
+import com.castla.mirror.policy.TunnelRestartPolicy
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,21 +42,8 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         // bionic (Termux) build prints it on stderr; the static build on stdout,
         // so both streams are scanned with this.
         private val URL_PATTERN = Regex("""https://[a-zA-Z0-9\-]+\.trycloudflare\.com""")
-        // Give cloudflared up to this long to report a tunnel; after that the UI
-        // sees a timeout error instead of an indefinite "Starting…" state.
-        private const val START_TIMEOUT_MS = 60_000L
-        // Auto-restart after a mid-session drop keeps retrying (capped backoff)
-        // instead of giving up: a dropped tunnel is normal on mobile networks, and
-        // the only legitimate stop is an explicit stop(). This avoids the "tunnel
-        // died and never came back" failure.
-        private const val RESTART_BASE_DELAY_MS = 3_000L
-        private const val MAX_RESTART_BACKOFF_MS = 30_000L
-        // Bounded retries for an INITIAL start that fails before ever registering
-        // (transient DNS/network blip). Auto-restart (below) covers drops AFTER a
-        // tunnel registered; this covers never-connecting cases so a one-off
-        // outage doesn't leave mirroring permanently dead until a manual retry.
-        private const val MAX_INITIAL_START_RETRIES = 3
-        private const val INITIAL_START_BASE_DELAY_MS = 2_000L
+        // Timing / retry numbers live in [TunnelRestartPolicy] so they can be
+        // unit-tested without spawning a process.
 
         /**
          * App-wide singleton so a running cloudflared process + `*.trycloudflare.com`
@@ -90,6 +79,10 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
     private var initialStartRetries: Int = 0
     private var restartJob: Job? = null
     @Volatile private var intentionalStop = false
+    // Bumped on every process destroy so a stale stdout-reader cannot schedule
+    // a second cloudflared after a newer generation has already started.
+    @Volatile private var processGeneration: Int = 0
+    private val dropTimestampsMs = ArrayList<Long>()
 
     private val _tunnelUrl = MutableStateFlow<String?>(null)
     val tunnelUrl: StateFlow<String?> = _tunnelUrl
@@ -128,9 +121,13 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
             "urlConfigured=${config.namedTunnelUrl.isNotBlank()} enabled=${config.namedTunnelEnabled}")
         lifecycleLock.lock()
         try {
-            if (_isRunning.value || _isStarting.value) {
+            if (process?.isAlive == true && (_isRunning.value || _isStarting.value)) {
                 Log.i(TAG, "Tunnel already running/starting — reusing existing tunnel")
                 return
+            }
+            if (process != null) {
+                Log.w(TAG, "Destroying leftover cloudflared before a new start")
+                destroyProcessLocked()
             }
 
             intentionalStop = false
@@ -146,17 +143,15 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         // Safety net: never leave the UI on "Starting tunnel…" forever.
         startTimeoutJob?.cancel()
         startTimeoutJob = scope.launch {
-            kotlinx.coroutines.delay(START_TIMEOUT_MS)
+            kotlinx.coroutines.delay(TunnelRestartPolicy.START_TIMEOUT_MS)
             if (_isStarting.value && !_isRunning.value) {
-                Log.w(TAG, "Tunnel start timed out after ${START_TIMEOUT_MS}ms")
+                Log.w(TAG, "Tunnel start timed out after ${TunnelRestartPolicy.START_TIMEOUT_MS}ms")
                 if (restartCount == 0 && !registered) {
-                    // Genuine FIRST-start failure (binary missing / network / token):
-                    // surface it once via the initial-start retry path.
                     _isStarting.value = false
-                    scheduleInitialStartRetry("cloudflared did not report a tunnel within ${START_TIMEOUT_MS / 1000}s")
+                    scheduleInitialStartRetry(
+                        "cloudflared did not report a tunnel within ${TunnelRestartPolicy.START_TIMEOUT_MS / 1000}s"
+                    )
                 } else {
-                    // A drop is already being recovered by auto-restart — don't let
-                    // this watchdog give up and permanently kill an active session.
                     Log.w(TAG, "Tunnel still (re)starting after timeout - leaving auto-restart to recover")
                 }
             }
@@ -188,6 +183,9 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                 Log.e(TAG, "Failed to start tunnel", e)
                 _error.value = e.message ?: "Unknown error"
                 _isStarting.value = false
+                if (!intentionalStop) {
+                    scheduleInitialStartRetry(e.message ?: "start failed")
+                }
             } finally {
                 lifecycleLock.unlock()
             }
@@ -204,15 +202,11 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
             startTimeoutJob?.cancel()
             registered = false
             initialStartRetries = 0
+            restartCount = 0
+            dropTimestampsMs.clear()
             readerThread?.interrupt()
             readerThread = null
-
-            try {
-                process?.destroy()
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to destroy process", e)
-            }
-            process = null
+            destroyProcessLocked()
             _tunnelUrl.value = null
             _isRunning.value = false
             _isStarting.value = false
@@ -223,6 +217,31 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
     }
 
     /**
+     * Caller MUST hold [lifecycleLock]. Kills any live cloudflared and invalidates
+     * the current stdout-reader generation so a stale thread cannot spawn a twin.
+     */
+    private fun destroyProcessLocked() {
+        val p = process
+        process = null
+        processGeneration++
+        if (p == null) return
+        try {
+            p.destroy()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to destroy cloudflared", e)
+        }
+        try {
+            if (p.isAlive) p.destroyForcibly()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to forcibly destroy cloudflared", e)
+        }
+    }
+
+    private fun processExitCode(proc: Process): Int = try {
+        if (proc.isAlive) -1 else proc.exitValue()
+    } catch (_: Exception) { -1 }
+
+    /**
      * cloudflared writes its real errors to stderr. We ship a bionic-linked build
      * (from Termux's package) so DNS resolves through Android's netd like any app,
      * but capture the stderr tail anyway so failures are explained instead of an
@@ -230,20 +249,19 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
      */
     private val stderrTail = java.util.LinkedList<String>()
 
-    private fun collectStderr(proc: Process) {
+    private fun collectStderr(proc: Process, gen: Int) {
         Thread({
             try {
                 val reader = BufferedReader(InputStreamReader(proc.errorStream))
                 var line: String?
                 while (reader.readLine().also { line = it } != null) {
+                    if (gen != processGeneration) return@Thread
                     val l = line ?: continue
                     Log.d(TAG, "cloudflared[err]: $l")
                     synchronized(stderrTail) {
                         stderrTail.add(l)
                         while (stderrTail.size > 40) stderrTail.removeFirst()
                     }
-                    // The bionic (Termux) build writes ALL output — including the
-                    // tunnel URL — to stderr, so registration must be detected here.
                     onTunnelLine("stderr", l)
                 }
             } catch (e: Exception) {
@@ -289,13 +307,8 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
 
     private fun failureMessage(fallback: String): String {
         val lastStderr = currentStderr()
-        // Non-blocking wait: the process may legitimately still be alive (quick
-        // tunnels are killed explicitly) — never hold up the caller on waitFor.
-        val exitCode = try {
-            if (process?.waitFor(2, java.util.concurrent.TimeUnit.SECONDS) == true)
-                process!!.exitValue()
-            else -1
-        } catch (e: Exception) { -1 }
+        val proc = process
+        val exitCode = if (proc != null) processExitCode(proc) else -1
         val meaningful = lastStderr.asReversed().firstOrNull {
             it.trim().isNotEmpty() && !it.contains(" INF ")
         }
@@ -322,9 +335,7 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
      * instead of letting the process vanish silently.
      */
     private fun logProcessExit(proc: Process, kind: String) {
-        val code = try {
-            if (proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)) proc.exitValue() else -1
-        } catch (e: Exception) { -1 }
+        val code = processExitCode(proc)
         val tail = currentStderr().takeLast(8)
         Log.w(TAG, "cloudflared exited ($kind): exitCode=$code | stderr tail: ${tail.joinToString(" || ")}")
     }
@@ -340,6 +351,8 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
             "tunnel",
             "--url", "http://127.0.0.1:$localPort",
             "--protocol", "http2",
+            "--edge-ip-version", "4",
+            "--ha-connections", "1",
             "--no-autoupdate"
         )
         Log.i(TAG, "Starting: ${cmd.joinToString(" ")}")
@@ -353,19 +366,21 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
 
         val proc = pb.start()
         process = proc
+        val gen = processGeneration
         clearStderr()
-        collectStderr(proc)
+        collectStderr(proc, gen)
 
         readerThread = Thread({
             try {
                 val reader = BufferedReader(InputStreamReader(proc.inputStream))
                 var line: String?
                 while (reader.readLine().also { line = it } != null) {
+                    if (gen != processGeneration) return@Thread
                     val l = line ?: continue
                     Log.d(TAG, "cloudflared: $l")
                     onTunnelLine("stdout", l)
                 }
-                // Process exited
+                if (gen != processGeneration || intentionalStop) return@Thread
                 Log.i(TAG, "cloudflared process exited")
                 logProcessExit(proc, "quick")
                 if (_isRunning.value) {
@@ -381,14 +396,13 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                 Log.d(TAG, "Reader thread interrupted")
             } catch (e: Exception) {
                 Log.e(TAG, "Error reading cloudflared output", e)
-                if (!intentionalStop) {
-                    if (_isRunning.value) {
-                        _tunnelUrl.value = null
-                        _isRunning.value = false
-                        scheduleAutoRestart("reader error: ${e.message}")
-                    } else {
-                        scheduleInitialStartRetry("reader error before tunnel established: ${e.message}")
-                    }
+                if (gen != processGeneration || intentionalStop) return@Thread
+                if (_isRunning.value) {
+                    _tunnelUrl.value = null
+                    _isRunning.value = false
+                    scheduleAutoRestart("reader error: ${e.message}")
+                } else {
+                    scheduleInitialStartRetry("reader error before tunnel established: ${e.message}")
                 }
                 _isStarting.value = false
             }
@@ -404,13 +418,13 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
      */
     private fun scheduleInitialStartRetry(reason: String) {
         if (intentionalStop) return
-        if (initialStartRetries >= MAX_INITIAL_START_RETRIES) {
-            Log.w(TAG, "Giving up after ${MAX_INITIAL_START_RETRIES} initial-start attempts: $reason")
+        if (TunnelRestartPolicy.shouldGiveUpInitial(initialStartRetries)) {
+            Log.w(TAG, "Giving up after ${TunnelRestartPolicy.MAX_INITIAL_START_RETRIES} initial-start attempts: $reason")
             _error.value = failureMessage("Tunnel failed to start ($reason). Please check internet and retry.")
             return
         }
         initialStartRetries++
-        val delay = INITIAL_START_BASE_DELAY_MS * initialStartRetries
+        val delay = TunnelRestartPolicy.initialRetryDelayMs(initialStartRetries)
         Log.w(TAG, "Tunnel did not start ($reason) — retry $initialStartRetries in ${delay}ms")
         restartJob?.cancel()
         restartJob = scope.launch {
@@ -431,11 +445,11 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
     private fun scheduleAutoRestart(reason: String) {
         if (intentionalStop) return
         restartCount++
-        // Never give up while the session is active: cap the backoff (don't let it
-        // grow unbounded) and keep retrying. A dropped tunnel is expected on mobile
-        // networks — the only thing that should stop retries is an explicit stop().
-        val delay = (RESTART_BASE_DELAY_MS * restartCount).coerceAtMost(MAX_RESTART_BACKOFF_MS)
-        Log.w(TAG, "Tunnel dropped ($reason) — auto-restart $restartCount in ${delay}ms (keeps retrying)")
+        val now = SystemClock.elapsedRealtime()
+        dropTimestampsMs.add(now)
+        val drops = TunnelRestartPolicy.dropsInWindow(dropTimestampsMs, now)
+        val delay = TunnelRestartPolicy.dropRetryDelayMs(restartCount, drops)
+        Log.w(TAG, "Tunnel dropped ($reason) — auto-restart $restartCount in ${delay}ms (dropsInWindow=$drops)")
         restartJob?.cancel()
         restartJob = scope.launch {
             kotlinx.coroutines.delay(delay)
@@ -457,7 +471,13 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
             throw IllegalStateException("cloudflared binary not found at ${binary.absolutePath}")
         }
 
-        val cmd = listOf(binary.absolutePath, "tunnel", "run", "--token", token)
+        val cmd = listOf(
+            binary.absolutePath, "tunnel",
+            "--edge-ip-version", "4",
+            "--ha-connections", "1",
+            "--no-autoupdate",
+            "run", "--token", token
+        )
         Log.i(TAG, "Starting NAMED tunnel: cloudflared tunnel run <redacted>")
 
         val pb = ProcessBuilder(cmd)
@@ -466,8 +486,9 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
 
         val proc = pb.start()
         process = proc
+        val gen = processGeneration
         clearStderr()
-        collectStderr(proc)
+        collectStderr(proc, gen)
 
         // Named tunnel hostname is known up front — surface it immediately.
         _tunnelUrl.value = TunnelSecurityConfig.load(context).namedTunnelUrl.ifBlank { null }
@@ -477,11 +498,12 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                 val reader = BufferedReader(InputStreamReader(proc.inputStream))
                 var line: String?
                 while (reader.readLine().also { line = it } != null) {
+                    if (gen != processGeneration) return@Thread
                     val l = line ?: continue
                     Log.d(TAG, "cloudflared: $l")
                     onTunnelLine("stdout", l)
                 }
-                // Process exited
+                if (gen != processGeneration || intentionalStop) return@Thread
                 Log.i(TAG, "cloudflared process exited")
                 logProcessExit(proc, "named")
                 val wasLive = _isRunning.value || registered
@@ -498,14 +520,13 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                 Log.d(TAG, "Reader thread interrupted")
             } catch (e: Exception) {
                 Log.e(TAG, "Error reading cloudflared output", e)
-                if (!intentionalStop) {
-                    if (_isRunning.value) {
-                        _tunnelUrl.value = null
-                        _isRunning.value = false
-                        scheduleAutoRestart("reader error: ${e.message}")
-                    } else {
-                        scheduleInitialStartRetry("reader error before tunnel established: ${e.message}")
-                    }
+                if (gen != processGeneration || intentionalStop) return@Thread
+                if (_isRunning.value) {
+                    _tunnelUrl.value = null
+                    _isRunning.value = false
+                    scheduleAutoRestart("reader error: ${e.message}")
+                } else {
+                    scheduleInitialStartRetry("reader error before tunnel established: ${e.message}")
                 }
                 _isStarting.value = false
             }

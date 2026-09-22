@@ -141,10 +141,20 @@ class JpegEncoder(
                 // 전송
                 onFrame(jpegData, true)
                 
+            } catch (e: OutOfMemoryError) {
+                Log.e(TAG, "JPEG encode OOM — dropping frame to avoid process kill", e)
+                try {
+                    reusableBitmap?.recycle()
+                    reusableBitmap = null
+                    croppedBitmap?.recycle()
+                    croppedBitmap = null
+                    cropCanvas = null
+                    baos.reset()
+                } catch (_: Throwable) {}
             } catch (e: Exception) {
                 Log.e(TAG, "JPEG encode error", e)
             } finally {
-                image.close()
+                try { image.close() } catch (_: Throwable) {}
             }
         }, handler)
 

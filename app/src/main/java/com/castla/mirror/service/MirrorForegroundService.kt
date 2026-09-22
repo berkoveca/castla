@@ -49,6 +49,8 @@ import com.castla.mirror.policy.AutoScalePolicy
 import com.castla.mirror.policy.ThermalMitigationPolicy
 import com.castla.mirror.policy.CodecModeTransition
 import com.castla.mirror.policy.DisconnectPolicy
+import com.castla.mirror.policy.EncoderRecoveryPolicy
+import com.castla.mirror.policy.TunnelRestartPolicy
 import com.castla.mirror.policy.ScreenOffAction
 import com.castla.mirror.policy.ScreenOffPolicy
 import com.castla.mirror.policy.ScreenOffState
@@ -158,10 +160,6 @@ class MirrorForegroundService : Service() {
         private const val VERIFY_BACKOFF_MS = 400L
         private const val BOUNDS_TOLERANCE_PX = 16
 
-        // Cloudflare tunnel liveness: a session that starts the tunnel but has no
-        // browser connect within this window gets its process stopped cleanly, so
-        // an unused session doesn't leave cloudflared running forever.
-        private const val TUNNEL_IDLE_TIMEOUT_MS = 60_000L
         // After a session ends, the tunnel is kept (reused by a fast restart) but
         // stopped if no new session adopts it within this window.
         private const val TUNNEL_ORPHAN_TIMEOUT_MS = 30_000L
@@ -257,6 +255,8 @@ class MirrorForegroundService : Service() {
     // Guard against concurrent Shizuku binding attempts
     @Volatile private var shizukuSetupInProgress = false
     private var shizukuBindRetryCount = 0
+    private var encoderErrorCount = 0
+    private var encoderRecoveryJob: Job? = null
     private val SHIZUKU_MAX_RETRIES = 2
     private val BIND_WAIT_BUDGET_MS = 8_000L
 
@@ -914,6 +914,7 @@ class MirrorForegroundService : Service() {
         try { abrJob?.cancel() } catch (_: Exception) {}
         try { autoScaleJob?.cancel() } catch (_: Exception) {}
         try { thermalHeadroomJob?.cancel() } catch (_: Exception) {}
+        try { encoderRecoveryJob?.cancel() } catch (_: Exception) {}
         try { serviceScope.cancel() } catch (_: Exception) {}
         try { compositionDispatcher.close() } catch (_: Exception) {}
 
@@ -966,6 +967,21 @@ class MirrorForegroundService : Service() {
             serviceScope.launch {
                 tunnel.tunnelUrl.collect { url ->
                     _tunnelUrlFlow.value = url
+                    // Idle-stop only after a public URL exists — Tesla MCU2 users
+                    // need minutes (not 60s from process spawn) to open the browser.
+                    if (url.isNullOrBlank()) {
+                        tunnelIdleJob?.cancel()
+                        tunnelIdleJob = null
+                    } else if (!browserConnected && !isCleanupInProgress) {
+                        tunnelIdleJob?.cancel()
+                        tunnelIdleJob = serviceScope.launch {
+                            kotlinx.coroutines.delay(TunnelRestartPolicy.IDLE_AFTER_URL_MS)
+                            if (!browserConnected && !isCleanupInProgress) {
+                                Log.i(TAG, "No browser connected within ${TunnelRestartPolicy.IDLE_AFTER_URL_MS}ms of URL — stopping tunnel")
+                                stopCloudflareTunnel()
+                            }
+                        }
+                    }
                 }
             }
             serviceScope.launch {
@@ -986,18 +1002,6 @@ class MirrorForegroundService : Service() {
 
             tunnel.start(MirrorServer.DEFAULT_PORT)
             Log.i(TAG, "Cloudflare tunnel start requested")
-
-            // Idle watchdog: if no browser connects to reach this session's server
-            // within the window, stop the tunnel cleanly so an unused session doesn't
-            // leave cloudflared running. Cancelled as soon as a browser connects.
-            tunnelIdleJob?.cancel()
-            tunnelIdleJob = serviceScope.launch {
-                kotlinx.coroutines.delay(TUNNEL_IDLE_TIMEOUT_MS)
-                if (!browserConnected && !isCleanupInProgress) {
-                    Log.i(TAG, "No browser connected within ${TUNNEL_IDLE_TIMEOUT_MS}ms — stopping tunnel")
-                    stopCloudflareTunnel()
-                }
-            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start Cloudflare tunnel", e)
         }
@@ -1086,8 +1090,13 @@ class MirrorForegroundService : Service() {
      * the phone). Mirrors the documented reboot risk in [performCleanup].
      */
     fun emergencyReleaseDisplays() {
+        try { virtualDisplayManager?.setPhysicalDisplayPower(true) } catch (_: Throwable) {}
         try { virtualDisplayManager?.release() } catch (_: Throwable) {}
         try { screenCapture?.release() } catch (_: Throwable) {}
+        try { videoEncoder?.release() } catch (_: Throwable) {}
+        try { jpegEncoder?.release() } catch (_: Throwable) {}
+        try { secondaryVideoEncoder?.release() } catch (_: Throwable) {}
+        try { secondaryJpegEncoder?.release() } catch (_: Throwable) {}
     }
 
     /**
@@ -1385,9 +1394,10 @@ class MirrorForegroundService : Service() {
 
             Log.i(TAG, "Pipeline initialized (idle): ${width}x${height}, audio=$audioEnabled")
             MirrorWidgetProvider.updateAllWidgets(this)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e(TAG, "Failed to start pipeline", e)
             FileLogger.e(TAG, "Failed to start pipeline: ${e.javaClass.simpleName}: ${e.message}")
+            try { emergencyReleaseDisplays() } catch (_: Throwable) {}
             stopSelf()
         }
     }
@@ -3568,6 +3578,7 @@ class MirrorForegroundService : Service() {
 
             currentWidth = width
             currentHeight = height
+            encoderErrorCount = 0
 
             val msg = JSONObject().apply {
                 put("type", "resolutionChanged")
@@ -3576,7 +3587,7 @@ class MirrorForegroundService : Service() {
             }
             mirrorServer?.broadcastControlMessage(msg.toString())
 
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e(TAG, "Failed to rebuild pipeline", e)
             FileLogger.e(TAG, "rebuildPipeline exception", e)
             markTerminal(TerminalReason.PIPELINE_REBUILD_EXCEPTION)
@@ -3649,6 +3660,7 @@ class MirrorForegroundService : Service() {
                 mirrorServer?.broadcastSpsPps(spsPps, channel)
             }
         }
+        encoder.onError = { err -> handleEncoderError(err) }
         encoder.start { frameData, isKeyFrame ->
             if (currentCodecMode == CodecModeTransition.MODE_FMP4) {
                 val muxer = getMuxer()
@@ -3661,6 +3673,26 @@ class MirrorForegroundService : Service() {
             }
         }
         mirrorServer?.setKeyframeRequester(channel) { encoder.requestKeyFrame() }
+    }
+
+    private fun handleEncoderError(message: String) {
+        encoderErrorCount++
+        Log.e(TAG, "Encoder error #$encoderErrorCount: $message")
+        FileLogger.e(TAG, "Encoder error #$encoderErrorCount: $message")
+        if (EncoderRecoveryPolicy.shouldStopSession(encoderErrorCount)) {
+            markTerminal(TerminalReason.PIPELINE_REBUILD_EXCEPTION)
+            return
+        }
+        if (!EncoderRecoveryPolicy.shouldRebuild(encoderErrorCount)) return
+        if (!browserConnected || isCleanupInProgress) return
+        encoderRecoveryJob?.cancel()
+        encoderRecoveryJob = serviceScope.launch {
+            kotlinx.coroutines.delay(EncoderRecoveryPolicy.rebuildDelayMs(encoderErrorCount))
+            if (browserConnected && !isCleanupInProgress) {
+                Log.w(TAG, "Rebuilding pipeline after encoder error #$encoderErrorCount")
+                rebuildPipeline(currentWidth, currentHeight, force = true)
+            }
+        }
     }
 
     private fun onCodecModeRequest(mode: String) {

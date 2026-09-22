@@ -945,10 +945,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!isLauncherMode) setStatus('Connecting...', '');
 
         clearFrameWatchdog();
+        if (videoSocket) {
+            try { videoSocket.onclose = null; videoSocket.close(); } catch (_) {}
+        }
         videoSocket = new WebSocket(wsUrl);
         videoSocket.binaryType = 'arraybuffer';
 
         videoSocket.onopen = () => {
+            reconnectAttempts = 0;
             if (!isLauncherMode) setStatus('Loading...', '');
             if (codecMode === 'mjpeg' && controlSocket && controlSocket.readyState === WebSocket.OPEN) {
                 controlSocket.send(JSON.stringify({ type: 'codec', mode: 'mjpeg' }));
@@ -1004,6 +1008,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     let reconnectTimer = null;
     let isReconnecting = false;
+    let reconnectAttempts = 0;
     let qualityReportInterval = null;
 
     // Frame-arrival watchdog: if the primary video socket stays open but stops
@@ -1040,15 +1045,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (isReconnecting) return;
         isReconnecting = true;
         clearTimeout(reconnectTimer);
+        const delay = Math.min(2000 * Math.pow(1.5, reconnectAttempts), 20000);
+        reconnectAttempts++;
         reconnectTimer = setTimeout(() => {
             isReconnecting = false;
-            if (videoSocket && videoSocket.readyState === WebSocket.CLOSED) connectVideo();
+            if (!videoSocket || videoSocket.readyState === WebSocket.CLOSED) connectVideo();
             if (SPLIT_STRATEGY === 'dual_stream' && browserSplitState.active && (!secondaryVideoSocket || secondaryVideoSocket.readyState === WebSocket.CLOSED)) connectSecondaryVideo();
-            if (controlSocket && controlSocket.readyState === WebSocket.CLOSED) connectControl();
+            if (!controlSocket || controlSocket.readyState === WebSocket.CLOSED) connectControl();
             if (audioPlayer && (!audioPlayer.socket || audioPlayer.socket.readyState === WebSocket.CLOSED)) {
                 audioPlayer.startFromUserGesture(`${wsProtocol}://${host}/ws/audio`);
             }
-        }, 3000);
+        }, delay);
     }
 
     let resizeTimer = null;
@@ -1117,9 +1124,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     function connectControl() {
         const wsUrl = `${wsProtocol}://${host}/ws/control`;
+        if (controlSocket) {
+            try { controlSocket.onclose = null; controlSocket.close(); } catch (_) {}
+        }
         controlSocket = new WebSocket(wsUrl);
 
         controlSocket.onopen = () => {
+            reconnectAttempts = 0;
             closeInputBubble(true);
             if (touchHandler) touchHandler.destroy();
             const renderer = (decoder && decoder.renderer) ? decoder.renderer : null;
