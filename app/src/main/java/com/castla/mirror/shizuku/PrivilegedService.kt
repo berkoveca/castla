@@ -849,8 +849,11 @@ class PrivilegedService : IPrivilegedService.Stub() {
             } catch (_: Exception) {}
 
             Log.i(TAG, "wakeUpDisplay($displayId): keyevent+userActivity+touch (no PowerManager.wakeUp)")
-        } catch (e: Exception) {
-            Log.w(TAG, "wakeUpDisplay($displayId) failed", e)
+        } catch (t: Throwable) {
+            // Throwable: this reflects into IPowerManager$Stub inside system_server: a
+            // signature/behavior mismatch there can surface as a LinkageError, not just
+            // an Exception, and must not escape this call uncaught.
+            Log.w(TAG, "wakeUpDisplay($displayId) failed", t)
         }
     }
 
@@ -877,9 +880,31 @@ class PrivilegedService : IPrivilegedService.Stub() {
     }
 
     // --- Physical display power control (scrcpy approach) ---
+    //
+    // This talks directly to SurfaceFlinger (SurfaceControl.setDisplayPowerMode) and, on
+    // API 34+, force-loads libandroid_servers.so — a native library meant to live inside
+    // system_server — into this separate shell-uid process. Both are inherently risky: a
+    // desync between what SurfaceFlinger thinks the panel state is and what system_server's
+    // DisplayPowerController thinks it is can crash system_server, which Android's own
+    // supervision treats as fatal and reboots the device for. Two mitigations below reduce
+    // that exposure without removing the feature:
+    //   1. Resolve the token ONCE and cache it (success or failure) — the expensive/risky
+    //      reflection chain (incl. the native lib load) previously reran on every single
+    //      screen-off/on toggle for the whole session.
+    //   2. Refuse to guess on devices that report more than one physical display id
+    //      (foldables/dual-screen) — ids[0] is not documented to be "the active panel",
+    //      and guessing wrong desyncs framework/SurfaceFlinger state on exactly the kind
+    //      of device where that desync is most likely to be fatal. Callers already treat
+    //      a false return as "unsupported" and fall back to the non-panel-off keep-alive
+    //      path (see MirrorForegroundService.executeScreenOffAction).
 
     private val POWER_MODE_OFF = 0
     private val POWER_MODE_NORMAL = 2
+
+    // Cached after the first resolution attempt. Explicitly nullable-inside-a-box so we can
+    // distinguish "not attempted yet" (null box) from "attempted and unsupported" (boxed null).
+    private var cachedDisplayToken: android.os.IBinder? = null
+    private var tokenResolutionAttempted = false
 
     override fun setPhysicalDisplayPower(on: Boolean) {
         Log.i(TAG, "[BUILD:screen-off-v2] setPhysicalDisplayPower($on) ENTRY")
@@ -891,16 +916,30 @@ class PrivilegedService : IPrivilegedService.Stub() {
                 android.os.IBinder::class.java, Int::class.javaPrimitiveType
             )
 
-            val token = getPhysicalDisplayToken(scClass)
+            val token = resolvePhysicalDisplayTokenCached(scClass)
             if (token != null) {
                 setMethod.invoke(null, token, mode)
                 Log.i(TAG, "Physical display power set to ${if (on) "ON" else "OFF"}")
             } else {
-                Log.e(TAG, "Could not get physical display token")
+                Log.e(TAG, "Could not get physical display token (unsupported or multi-panel device)")
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "setPhysicalDisplayPower failed", e)
+        } catch (t: Throwable) {
+            // Throwable, not Exception: the native-load branch below can surface
+            // UnsatisfiedLinkError/LinkageError, which do not extend Exception.
+            Log.e(TAG, "setPhysicalDisplayPower failed", t)
         }
+    }
+
+    private fun resolvePhysicalDisplayTokenCached(scClass: Class<*>): android.os.IBinder? {
+        if (tokenResolutionAttempted) return cachedDisplayToken
+        tokenResolutionAttempted = true
+        cachedDisplayToken = try {
+            getPhysicalDisplayToken(scClass)
+        } catch (t: Throwable) {
+            Log.e(TAG, "Physical display token resolution failed", t)
+            null
+        }
+        return cachedDisplayToken
     }
 
     private fun getPhysicalDisplayToken(scClass: Class<*>): android.os.IBinder? {
@@ -909,8 +948,14 @@ class PrivilegedService : IPrivilegedService.Stub() {
             val getIds = scClass.getMethod("getPhysicalDisplayIds")
             val getToken = scClass.getMethod("getPhysicalDisplayToken", Long::class.javaPrimitiveType)
             val ids = getIds.invoke(null) as? LongArray
-            if (ids != null && ids.isNotEmpty()) {
-                return getToken.invoke(null, ids[0]) as? android.os.IBinder
+            when {
+                ids == null || ids.isEmpty() -> {}
+                ids.size > 1 -> {
+                    Log.w(TAG, "Multiple physical displays (${ids.size}) reported — " +
+                        "cannot safely pick one, treating panel-off as unsupported")
+                    return null
+                }
+                else -> return getToken.invoke(null, ids[0]) as? android.os.IBinder
             }
         } catch (_: Exception) {}
 
@@ -938,14 +983,26 @@ class PrivilegedService : IPrivilegedService.Stub() {
                 val loadLib = Runtime::class.java.getDeclaredMethod("loadLibrary0", Class::class.java, String::class.java)
                 loadLib.isAccessible = true
                 loadLib.invoke(Runtime.getRuntime(), dcClass, "android_servers")
-            } catch (_: Exception) {}
+            } catch (t: Throwable) {
+                // UnsatisfiedLinkError/LinkageError extend Error, not Exception — must be
+                // caught explicitly or they escape both this and the outer catch below.
+                Log.w(TAG, "android_servers native load failed (may already be loaded)", t)
+            }
             val getIds = dcClass.getMethod("getPhysicalDisplayIds")
             val getToken = dcClass.getMethod("getPhysicalDisplayToken", Long::class.javaPrimitiveType)
             val ids = getIds.invoke(null) as? LongArray
-            if (ids != null && ids.isNotEmpty()) {
-                return getToken.invoke(null, ids[0]) as? android.os.IBinder
+            when {
+                ids == null || ids.isEmpty() -> {}
+                ids.size > 1 -> {
+                    Log.w(TAG, "Multiple physical displays (${ids.size}) reported via DisplayControl — " +
+                        "cannot safely pick one, treating panel-off as unsupported")
+                    return null
+                }
+                else -> return getToken.invoke(null, ids[0]) as? android.os.IBinder
             }
-        } catch (_: Exception) {}
+        } catch (t: Throwable) {
+            Log.w(TAG, "DisplayControl (API 34+) path failed", t)
+        }
 
         // Fallback: getBuiltInDisplay(0)
         try {
