@@ -1091,7 +1091,11 @@ done
 trap '' HUP TERM INT QUIT
 INNER=$INNER_SCRIPT
 echo ${'$'}${'$'} > $OUTER_PID_FILE
-echo -900 > /proc/${'$'}${'$'}/oom_score_adj 2>/dev/null
+# -100 keeps the outer watchdog favored but KILLABLE under memory pressure,
+# matching the inner watchdog / shizuku_server fix in buildInnerScript(). Writing
+# -900 (fully unkillable) pinned RAM the lowmemorykiller could never reclaim,
+# which can force a kernel OOM panic -> phone reboot (see eb89049).
+echo -100 > /proc/${'$'}${'$'}/oom_score_adj 2>/dev/null
 
 while true; do
     ALIVE=0
