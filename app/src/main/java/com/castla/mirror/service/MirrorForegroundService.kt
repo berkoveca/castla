@@ -161,8 +161,13 @@ class MirrorForegroundService : Service() {
         private const val BOUNDS_TOLERANCE_PX = 16
 
         // After a session ends, the tunnel is kept (reused by a fast restart) but
-        // stopped if no new session adopts it within this window.
-        private const val TUNNEL_ORPHAN_TIMEOUT_MS = 30_000L
+        // stopped if no new session adopts it within this window. Must comfortably
+        // exceed ShizukuSetup's AUTO_LAUNCH_COOLDOWN_MS (60s): a session restart is
+        // often caused by a Shizuku death in the first place, and if this fires
+        // before that recovery finishes, the (named, stable-URL) tunnel gets killed
+        // for no reason — forcing a full reconnect/new-hostname cycle on top of
+        // whatever the original hiccup was.
+        private const val TUNNEL_ORPHAN_TIMEOUT_MS = 75_000L
     }
 
     /** Binder for local (same-process) binding */

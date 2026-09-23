@@ -100,19 +100,8 @@ data class TunnelSecurityConfig(
         fun sha256Hex(input: String): String =
             MessageDigest.getInstance("SHA-256").digest(input.toByteArray()).toHex()
 
-        /** True when a connector token has been saved (regardless of the toggle). */
+        /** True when a connector token has been saved. */
         fun hasNamedTunnel(config: TunnelSecurityConfig): Boolean =
             config.namedTunnelToken.isNotBlank()
-
-        /**
-         * Prefer the permanent (stable-URL) tunnel whenever a connector token is
-         * present. A saved token is meaningless for quick tunnels, and silently
-         * falling back to a quick tunnel means every reconnect spawns a NEW
-         * *.trycloudflare.com URL — which drops an in-progress mirroring session
-         * because the client can no longer reach the old URL. The in-UI toggle
-         * only exists to *disable* a token the user no longer wants.
-         */
-        fun shouldUseNamedTunnel(config: TunnelSecurityConfig): Boolean =
-            hasNamedTunnel(config)
     }
 }

@@ -16,13 +16,19 @@ import java.io.File
 import java.io.InputStreamReader
 
 /**
- * Manages Cloudflare tunnels exposing the local MirrorServer (port 9090).
+ * Manages a Cloudflare named tunnel exposing the local MirrorServer (port 9090).
  *
- * Supports two modes:
- *  - Quick tunnel: `cloudflared tunnel --url ...` → temporary
- *    `*.trycloudflare.com` URL that changes each run.
- *  - Named tunnel: `cloudflared tunnel run <token>` → permanent hostname
- *    configured by the user in the Cloudflare Zero Trust dashboard.
+ * Named tunnel only: `cloudflared tunnel run --token ...` → the permanent
+ * hostname the user configured in the Cloudflare Zero Trust dashboard.
+ *
+ * The ephemeral "quick tunnel" mode (`cloudflared tunnel --url ...`, a random
+ * `*.trycloudflare.com` hostname assigned fresh on every process start) has been
+ * removed: every auto-restart of a quick tunnel hands out a NEW hostname, which
+ * permanently drops whatever client (the Tesla browser) was connected through the
+ * old one — there is no way for it to discover the new URL on its own. A named
+ * tunnel's hostname is stable across restarts, so a reconnect is invisible to the
+ * client instead of a hard disconnect. Requires [TunnelSecurityConfig.hasNamedTunnel]
+ * and `namedTunnelEnabled` to both be true — see [start].
  *
  * The binary is shipped INSIDE the APK as `jniLibs/arm64-v8a/libcloudflared.so`
  * and extracted by the package manager to `nativeLibraryDir` at install time.
@@ -38,18 +44,14 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         // app/src/main/jniLibs/<abi>/ ; the package manager extracts any
         // `jniLibs/<abi>/lib*.so` into nativeLibraryDir at install time.
         private const val LIB_NAME = "libcloudflared.so"
-        // Regex to match the trycloudflare URL from cloudflared output. The
-        // bionic (Termux) build prints it on stderr; the static build on stdout,
-        // so both streams are scanned with this.
-        private val URL_PATTERN = Regex("""https://[a-zA-Z0-9\-]+\.trycloudflare\.com""")
         // Timing / retry numbers live in [TunnelRestartPolicy] so they can be
         // unit-tested without spawning a process.
 
         /**
-         * App-wide singleton so a running cloudflared process + `*.trycloudflare.com`
-         * URL survives mirroring-session boundaries. Without this, every session start
-         * spawns a fresh tunnel process and a new URL (the "constantly starting
-         * tunnel" symptom).
+         * App-wide singleton so a running cloudflared process survives mirroring
+         * session boundaries. Without this, every session start would spawn a
+         * fresh cloudflared process and force an unnecessary reconnect cycle
+         * even though the named tunnel's hostname never actually changes.
          */
         @Volatile private var instance: CloudflareTunnelManager? = null
 
@@ -105,20 +107,25 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
     }
 
     /**
-     * Start cloudflared pointing at the given local port.
-     *
-     * Two modes:
-     *  - Quick tunnel (default): `cloudflared tunnel --url ...` → temporary
-     *    `*.trycloudflare.com` URL parsed from stdout.
-     *  - Named tunnel: when a Zero Trust connector token is configured, runs
-     *    `cloudflared tunnel run <token>` for a permanent configured hostname.
+     * Start the named cloudflared tunnel pointing at the given local port.
+     * Requires a Cloudflare Zero Trust connector token AND the "permanent
+     * tunnel" toggle to be on (see [TunnelSecurityConfig]); fails fast with a
+     * clear error otherwise rather than silently falling back to an ephemeral
+     * quick tunnel (that fallback has been removed — see the class doc above).
      */
     fun start(localPort: Int = 9090) {
         val config = TunnelSecurityConfig.load(context)
-        val useNamed = TunnelSecurityConfig.shouldUseNamedTunnel(config)
-        Log.i(TAG, "Tunnel mode=${if (useNamed) "NAMED(stable)" else "QUICK(temporal)"} " +
-            "tokenPresent=${config.namedTunnelToken.isNotBlank()} " +
-            "urlConfigured=${config.namedTunnelUrl.isNotBlank()} enabled=${config.namedTunnelEnabled}")
+        if (!TunnelSecurityConfig.hasNamedTunnel(config)) {
+            Log.e(TAG, "No Cloudflare connector token configured — cannot start tunnel")
+            _error.value = "No Cloudflare tunnel token configured. Add one in Settings."
+            return
+        }
+        if (!config.namedTunnelEnabled) {
+            Log.i(TAG, "Named tunnel toggle is off — not starting a tunnel")
+            _error.value = null
+            return
+        }
+        Log.i(TAG, "Tunnel mode=NAMED(stable) urlConfigured=${config.namedTunnelUrl.isNotBlank()}")
         lifecycleLock.lock()
         try {
             if (process?.isAlive == true && (_isRunning.value || _isStarting.value)) {
@@ -174,11 +181,7 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
                             "(${binaryFile().absolutePath}). Reinstall the latest APK."
                     )
                 }
-                if (TunnelSecurityConfig.shouldUseNamedTunnel(config)) {
-                    startNamedTunnelProcess(config.namedTunnelToken)
-                } else {
-                    startQuickTunnelProcess(localPort)
-                }
+                startNamedTunnelProcess(config.namedTunnelToken)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start tunnel", e)
                 _error.value = e.message ?: "Unknown error"
@@ -274,24 +277,8 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
 
     private fun clearStderr() = synchronized(stderrTail) { stderrTail.clear() }
 
-    /**
-     * Shared line handler for both stdout and stderr: flips running/starting when
-     * a quick-tunnel URL or a registered named-tunnel connection appears on
-     * either stream (stream choice differs between the static and bionic builds).
-     */
+    /** Named-tunnel-only: only the "Registered tunnel connection" line matters now. */
     private fun onTunnelLine(stream: String, l: String) {
-        val urlMatch = URL_PATTERN.find(l)
-        if (urlMatch != null) {
-            val url = urlMatch.value
-            Log.i(TAG, "Tunnel URL: $url ($stream)")
-            restartCount = 0
-            initialStartRetries = 0
-            restartJob?.cancel()
-            _tunnelUrl.value = url
-            _isRunning.value = true
-            _isStarting.value = false
-            return
-        }
         if (!registered &&
             (l.contains("Registered tunnel connection") || l.contains("Registered tunnel network"))
         ) {
@@ -338,75 +325,6 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         val code = processExitCode(proc)
         val tail = currentStderr().takeLast(8)
         Log.w(TAG, "cloudflared exited ($kind): exitCode=$code | stderr tail: ${tail.joinToString(" || ")}")
-    }
-
-    private fun startQuickTunnelProcess(localPort: Int) {
-        val binary = binaryFile()
-        if (!binary.exists()) {
-            throw IllegalStateException("cloudflared binary not found at ${binary.absolutePath}")
-        }
-
-        val cmd = listOf(
-            binary.absolutePath,
-            "tunnel",
-            "--url", "http://127.0.0.1:$localPort",
-            "--protocol", "http2",
-            "--edge-ip-version", "4",
-            "--ha-connections", "1",
-            "--no-autoupdate"
-        )
-        Log.i(TAG, "Starting: ${cmd.joinToString(" ")}")
-
-        val pb = ProcessBuilder(cmd)
-        // The bionic build uses Android's CA store only if told where it is, so
-        // point it at /system/etc/security/cacerts (world-readable hashed dir
-        // present since Android 7, minSdk 26).
-        pb.environment()["SSL_CERT_DIR"] = "/system/etc/security/cacerts"
-        pb.environment()["SSL_CERT_FILE"] = "/system/etc/security/cacerts/cacert.pem"
-
-        val proc = pb.start()
-        process = proc
-        val gen = processGeneration
-        clearStderr()
-        collectStderr(proc, gen)
-
-        readerThread = Thread({
-            try {
-                val reader = BufferedReader(InputStreamReader(proc.inputStream))
-                var line: String?
-                while (reader.readLine().also { line = it } != null) {
-                    if (gen != processGeneration) return@Thread
-                    val l = line ?: continue
-                    Log.d(TAG, "cloudflared: $l")
-                    onTunnelLine("stdout", l)
-                }
-                if (gen != processGeneration || intentionalStop) return@Thread
-                Log.i(TAG, "cloudflared process exited")
-                logProcessExit(proc, "quick")
-                if (_isRunning.value) {
-                    _tunnelUrl.value = null
-                    _isRunning.value = false
-                    _error.value = null
-                    scheduleAutoRestart("SSL/network dropped the tunnel")
-                } else {
-                    scheduleInitialStartRetry("cloudflared exited without establishing a tunnel")
-                }
-                _isStarting.value = false
-            } catch (e: InterruptedException) {
-                Log.d(TAG, "Reader thread interrupted")
-            } catch (e: Exception) {
-                Log.e(TAG, "Error reading cloudflared output", e)
-                if (gen != processGeneration || intentionalStop) return@Thread
-                if (_isRunning.value) {
-                    _tunnelUrl.value = null
-                    _isRunning.value = false
-                    scheduleAutoRestart("reader error: ${e.message}")
-                } else {
-                    scheduleInitialStartRetry("reader error before tunnel established: ${e.message}")
-                }
-                _isStarting.value = false
-            }
-        }, "cloudflared-reader").also { it.isDaemon = true; it.start() }
     }
 
     /**
