@@ -1,7 +1,10 @@
 package com.castla.mirror.server
 
 import android.util.Log
+import com.castla.mirror.diagnostics.DiagnosticEvent
+import com.castla.mirror.diagnostics.DiagnosticSanitizer
 import com.castla.mirror.diagnostics.FileLogger
+import com.castla.mirror.diagnostics.MirrorDiagnostics
 import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoWSD
 import org.json.JSONObject
@@ -20,10 +23,15 @@ class ControlSocket(
 
     override fun onOpen() {
         server.registerControlSocket(this)
+        val ip = runCatching { handshake.remoteIpAddress }.getOrNull()
+        MirrorDiagnostics.log(DiagnosticEvent.SOCKET_OPENED,
+            "[control] remote=${DiagnosticSanitizer.maskIp(ip)}")
     }
 
     override fun onClose(code: NanoWSD.WebSocketFrame.CloseCode?, reason: String?, initiatedByRemote: Boolean) {
         server.unregisterControlSocket(this)
+        MirrorDiagnostics.log(DiagnosticEvent.SOCKET_CLOSED,
+            "[control] code=$code reason=${reason ?: "<none>"} remoteInitiated=$initiatedByRemote")
     }
 
     override fun onMessage(message: NanoWSD.WebSocketFrame) {
@@ -161,5 +169,7 @@ class ControlSocket(
     override fun onException(exception: IOException?) {
         Log.w(TAG, "Control socket exception", exception)
         server.unregisterControlSocket(this)
+        MirrorDiagnostics.log(DiagnosticEvent.SOCKET_EXCEPTION,
+            "[control] ${exception?.javaClass?.simpleName ?: "unknown"}: ${exception?.message ?: ""}")
     }
 }

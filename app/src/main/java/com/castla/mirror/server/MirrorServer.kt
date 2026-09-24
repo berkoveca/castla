@@ -431,6 +431,13 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         logHttpFirstContact(session)
         var uri = session.uri
         if (uri == "/") uri = "/index.html"
+        if (uri == "/index.html") {
+            MirrorDiagnostics.log(
+                DiagnosticEvent.PAGE_LOAD,
+                "src=${DiagnosticSanitizer.maskIp(session.remoteIpAddress)} " +
+                    "ua=${DiagnosticSanitizer.safeMessage(session.headers["user-agent"] ?: "<none>")}"
+            )
+        }
 
         val config = TunnelSecurityConfig.load(context)
 

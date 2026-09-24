@@ -28,7 +28,37 @@ enum class DiagnosticEvent {
     /** First non-loopback HTTP request of the session (masked source IP + sanitized Host). */
     HTTP_FIRST_CONTACT,
     /** Browser socket count transitioned 0→1 (first contact or reconnect). */
-    WS_CONNECTED
+    WS_CONNECTED,
+    /**
+     * Per-socket open, one event per channel (video/secondary/control/audio),
+     * with the masked remote IP. Distinguishes "the same client reconnecting
+     * repeatedly" from "several different clients/ports flapping" — the
+     * aggregate WS_CONNECTED/SOCKET_DISCONNECTED pair can't tell those apart.
+     */
+    SOCKET_OPENED,
+    /**
+     * Per-socket close, one event per channel, carrying the WebSocket close
+     * code/reason and whether the remote end (vs. this app) initiated it.
+     * A clean close (code+reason present, initiatedByRemote=true) means the
+     * BROWSER hung up on purpose; an abrupt close with no code/reason usually
+     * means the underlying TCP connection died before a close frame could be
+     * sent — i.e. a network-layer drop, not an app or browser decision.
+     */
+    SOCKET_CLOSED,
+    /**
+     * Per-socket transport exception (as opposed to a clean WebSocket close).
+     * Carries the exception class + message, e.g. "SocketTimeoutException" vs.
+     * "ConnectionResetException" — the two look identical as a bare
+     * SOCKET_DISCONNECTED but point at very different root causes.
+     */
+    SOCKET_EXCEPTION,
+    /**
+     * The main HTML page was served (every time, not just first contact).
+     * Distinguishes "the browser genuinely reloaded the page N times" from
+     * "sockets reconnected without a page reload" — the two produce identical
+     * WS_CONNECTED/SOCKET_DISCONNECTED churn but need very different fixes.
+     */
+    PAGE_LOAD
 }
 
 /**
