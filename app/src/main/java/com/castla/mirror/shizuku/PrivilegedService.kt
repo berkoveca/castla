@@ -43,8 +43,19 @@ class PrivilegedService : IPrivilegedService.Stub() {
         private const val DISPLAY_FLAG_DESTROY_CONTENT = 1 shl 8
     }
 
+    // Binder calls arrive on a thread pool: every method that touches these maps is
+    // @Synchronized so a concurrent create/release (e.g. primary + split) can't lose
+    // track of a display — an untracked VD is never released and can outlive us.
     private val virtualDisplays = mutableMapOf<Int, VirtualDisplay>()
     private val virtualDisplayNames = mutableMapOf<Int, String>()
+    /**
+     * Strong reference to the client's death token. A BinderProxy that nothing
+     * references can be garbage-collected, and its death recipient silently goes
+     * with it — the "release VDs when the app dies" safety net would never fire.
+     */
+    @Volatile private var deathToken: android.os.IBinder? = null
+    /** True only while WE have forced the physical panel off via SurfaceControl. */
+    @Volatile private var panelForcedOff = false
     private var inputManagerInstance: Any? = null
     private var injectMethod: Method? = null
     private var shellContext: android.content.Context? = null
@@ -210,6 +221,7 @@ class PrivilegedService : IPrivilegedService.Stub() {
         }
     }
 
+    @Synchronized
     override fun createVirtualDisplay(width: Int, height: Int, dpi: Int, name: String): Int {
         val existingDisplayIds = virtualDisplayNames
             .filterValues { it == name }
@@ -292,6 +304,7 @@ class PrivilegedService : IPrivilegedService.Stub() {
         }
     }
 
+    @Synchronized
     override fun setSurface(displayId: Int, surface: Surface?) {
         val display = virtualDisplays[displayId]
         if (display == null) {
@@ -302,6 +315,7 @@ class PrivilegedService : IPrivilegedService.Stub() {
         Log.i(TAG, "Surface attached to virtual display $displayId")
     }
 
+    @Synchronized
     override fun releaseVirtualDisplay(displayId: Int) {
         virtualDisplays.remove(displayId)?.let {
             virtualDisplayNames.remove(displayId)
@@ -801,9 +815,15 @@ class PrivilegedService : IPrivilegedService.Stub() {
         }
     }
 
+    @Synchronized
     override fun destroy() {
         try { stopSystemAudioCapture() } catch (_: Throwable) {}
-        try { setPhysicalDisplayPower(true) } catch (_: Throwable) {}
+        // Only undo a panel-off we caused. Calling SurfaceControl unconditionally
+        // here ran the riskiest reflection path (incl. loading libandroid_servers on
+        // API 34+) on every teardown, even when the panel was never touched.
+        if (panelForcedOff) {
+            try { setPhysicalDisplayPower(true) } catch (_: Throwable) {}
+        }
         virtualDisplays.values.forEach { vd ->
             try { vd.release() } catch (_: Throwable) {}
         }
@@ -857,6 +877,7 @@ class PrivilegedService : IPrivilegedService.Stub() {
         }
     }
 
+    @Synchronized
     override fun resizeVirtualDisplay(displayId: Int, width: Int, height: Int, densityDpi: Int) {
         val vd = virtualDisplays[displayId]
         if (vd == null) {
@@ -869,6 +890,7 @@ class PrivilegedService : IPrivilegedService.Stub() {
 
     override fun registerDeathToken(token: android.os.IBinder) {
         try {
+            deathToken = token
             token.linkToDeath({
                 Log.w(TAG, "Client died! Cleaning up PrivilegedService and killing VDs.")
                 try { destroy() } catch (_: Throwable) {}
@@ -919,6 +941,7 @@ class PrivilegedService : IPrivilegedService.Stub() {
             val token = resolvePhysicalDisplayTokenCached(scClass)
             if (token != null) {
                 setMethod.invoke(null, token, mode)
+                panelForcedOff = !on
                 Log.i(TAG, "Physical display power set to ${if (on) "ON" else "OFF"}")
             } else {
                 Log.e(TAG, "Could not get physical display token (unsupported or multi-panel device)")

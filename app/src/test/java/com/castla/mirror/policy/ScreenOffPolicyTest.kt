@@ -157,4 +157,36 @@ class ScreenOffPolicyTest {
         assertEquals(ScreenOffState.ACTIVE, policy.state)
         assertTrue(policy.isPanelOffSupported)
     }
+
+    // ── System (power-button / timeout) screen-off ──
+
+    @Test
+    fun `system screen off never forces the panel off`() {
+        // The system has already turned the panel off; a SurfaceControl call now
+        // would race DisplayPowerController / AOD (suspected reboot trigger).
+        val action = policy.onSystemScreenOff()
+        assertEquals(ScreenOffAction.START_KEEP_ALIVE, action)
+        assertEquals(ScreenOffState.KEEP_ALIVE_ACTIVE, policy.state)
+    }
+
+    @Test
+    fun `system screen off does not mark panel-off unsupported`() {
+        policy.onSystemScreenOff()
+        assertTrue(policy.isPanelOffSupported)
+    }
+
+    @Test
+    fun `system screen off after button panel-off is a no-op`() {
+        policy.onScreenOff(panelOffSupported = true)
+        policy.onPanelOffResult(success = true)
+        assertEquals(ScreenOffAction.NONE, policy.onSystemScreenOff())
+        assertEquals(ScreenOffState.PANEL_OFF_ACTIVE, policy.state)
+    }
+
+    @Test
+    fun `screen on after system screen off stops keep-alive`() {
+        policy.onSystemScreenOff()
+        assertEquals(ScreenOffAction.STOP_KEEP_ALIVE, policy.onScreenOn())
+        assertEquals(ScreenOffState.ACTIVE, policy.state)
+    }
 }

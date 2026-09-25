@@ -28,10 +28,11 @@ enum class ScreenOffAction {
 /**
  * Pure-logic state machine for screen-off mirroring.
  *
- * Strategy priority:
- * 1. Physical panel OFF (scrcpy approach) — Samsung preferred path.
+ * Strategy:
+ * 1. Physical panel OFF (scrcpy approach) — ONLY from the explicit UI button.
  *    Device stays awake, VD keeps rendering, physical screen goes dark.
- * 2. Keep-alive (periodic wakeUpDisplay) — fallback when panel-off fails.
+ * 2. Keep-alive (periodic wakeUpDisplay) — for system screen-off (power button,
+ *    timeout) and as the fallback when panel-off fails.
  * 3. Normal lock — not actively supported (may cause black screen on VD).
  *
  * Thread safety: call from a single thread (main/service scope).
@@ -65,6 +66,18 @@ class ScreenOffPolicy {
             ScreenOffAction.START_KEEP_ALIVE
         }
     }
+
+    /**
+     * Called when the SYSTEM turned the screen off (power button, timeout) —
+     * i.e. on ACTION_SCREEN_OFF. Never returns [ScreenOffAction.TURN_PANEL_OFF]:
+     * the panel is already off and DisplayPowerController is mid-transition
+     * (OFF / DOZE / AOD). Writing a power mode to SurfaceFlinger behind its back
+     * at that moment is the prime suspect for SurfaceFlinger/system_server
+     * crashes and phone reboots. Panel-off stays available through the explicit
+     * "Screen Off" button ([onScreenOff] with panelOffSupported=true), where the
+     * system still believes the screen is on — the scrcpy usage pattern.
+     */
+    fun onSystemScreenOff(): ScreenOffAction = onScreenOff(panelOffSupported = false)
 
     /**
      * Called after setPhysicalDisplayPower(false) completes.

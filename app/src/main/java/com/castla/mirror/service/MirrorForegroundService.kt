@@ -407,7 +407,7 @@ class MirrorForegroundService : Service() {
             override fun onReceive(context: Context, intent: Intent?) {
                 when (intent?.action) {
                     android.content.Intent.ACTION_SCREEN_OFF -> {
-                        Log.i(TAG, "Screen OFF detected — using scrcpy approach")
+                        Log.i(TAG, "Screen OFF detected — keeping VD alive (keep-alive path)")
                         onPhoneScreenOff()
                         // Check keyguard shortly after screen off (keyguard engages with a small delay)
                         mainHandler.postDelayed({
@@ -814,7 +814,10 @@ class MirrorForegroundService : Service() {
 
     private fun onPhoneScreenOff() {
         MirrorDiagnostics.log(DiagnosticEvent.SCREEN_OFF)
-        val action = screenOffPolicy.onScreenOff(panelOffSupported = screenOffPolicy.isPanelOffSupported)
+        // System screen-off (power button / timeout): keep the VD alive with the
+        // keep-alive path. Never toggle the panel via SurfaceControl here — see
+        // ScreenOffPolicy.onSystemScreenOff.
+        val action = screenOffPolicy.onSystemScreenOff()
         logScreenState("Screen OFF (action=$action)")
         executeScreenOffAction(action)
         _panelOffStateFlow.value = screenOffPolicy.state
