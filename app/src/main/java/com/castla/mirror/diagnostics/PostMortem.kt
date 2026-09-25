@@ -39,8 +39,11 @@ printf 'setting.phantom_monitor=%s\n' "${'$'}(settings get global settings_enabl
 printf 'setting.max_phantom=%s\n' "${'$'}(device_config get activity_manager max_phantom_processes 2>/dev/null)"
 printf 'uptime=%s\n' "${'$'}(cut -d' ' -f1 /proc/uptime 2>/dev/null)"
 dumpsys dropbox 2>/dev/null | grep -E '^[0-9][0-9-]* [0-9:]* (system_server_[a-z_]*|SYSTEM_RESTART|SYSTEM_TOMBSTONE|SYSTEM_LAST_KMSG|SYSTEM_BOOT|SYSTEM_FSCK|SYSTEM_RECOVERY_LOG|system_app_native_crash|system_app_crash|data_app_native_crash|data_app_crash|data_app_anr|[a-z_]*thermal[a-z_]*) ' | tail -n 25 | sed 's/^/dropbox: /'
-for T in system_server_crash system_server_watchdog system_server_native_crash system_server_wtf SYSTEM_RESTART; do
+for T in system_server_crash system_server_watchdog system_server_wtf SYSTEM_RESTART; do
   dumpsys dropbox --print ${'$'}T 2>/dev/null | sed -n '/^=====/h;/^=====/!H;${'$'}{x;/^=====/p;}' | grep -v '^=====' | grep -v '^ *${'$'}' | head -n 16 | sed "s/^/detail.${'$'}T: /"
+done
+for T in system_server_native_crash SYSTEM_TOMBSTONE; do
+  dumpsys dropbox --print ${'$'}T 2>/dev/null | sed -n '/^=====/h;/^=====/!H;${'$'}{x;/^=====/p;}' | grep -E '^(Timestamp:|Cmdline:|pid: |signal |Abort message:|Cause:| *#[0-9][0-9] pc )' | head -n 30 | sed "s/^/native: ${'$'}T: /"
 done
 dumpsys dropbox --print SYSTEM_TOMBSTONE 2>/dev/null | grep -E '^(Timestamp:|Cmdline:|signal |Abort message:)' | tail -n 16 | sed 's/^/tomb: /'
 dumpsys dropbox --print SYSTEM_LAST_KMSG 2>/dev/null | sed -n '/^=====/h;/^=====/!H;${'$'}{x;/^=====/p;}' | grep -iE 'panic|oops|bug:|watchdog|thermal|overheat|shutdown|reboot|oom-kill|out of memory' | tail -n 20 | sed 's/^/kmsg: /'

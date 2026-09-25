@@ -37,6 +37,23 @@ class PostMortemParserTest {
     }
 
     @Test
+    fun `native crash abort message thread and backtrace are shown in their own section`() {
+        val r = PostMortemParser.parse(
+            """
+            native: system_server_native_crash: pid: 1234, tid: 1400, name: InputDispatcher  >>> system_server <<<
+            native: system_server_native_crash: Abort message: 'Check failed: ...'
+            native: system_server_native_crash:       #00 pc 000000000004f8a4  /apex/com.android.runtime/lib64/bionic/libc.so (abort+164)
+            """.trimIndent()
+        )
+        assertEquals(3, r.nativeCrash.size)
+        val lines = r.summaryLines()
+        val header = lines.indexOf("latest native crash (which thread aborted and why):")
+        assertTrue(lines.toString(), header >= 0)
+        assertTrue(lines[header + 1].contains("name: InputDispatcher"))
+        assertTrue(lines.any { it.contains("#00 pc") })
+    }
+
+    @Test
     fun `summary lines include the classified boot reason and the evidence`() {
         val lines = PostMortemParser.parse(sample).summaryLines()
         val joined = lines.joinToString("\n")

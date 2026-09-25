@@ -14,7 +14,9 @@ data class PostMortemReport(
     val dropboxEvents: List<String>,
     val details: List<String>,
     val tombstones: List<String>,
-    val kmsg: List<String>
+    val kmsg: List<String>,
+    /** Abort message, crashing thread and top backtrace of the newest native crash. */
+    val nativeCrash: List<String> = emptyList()
 ) {
     fun summaryLines(): List<String> = buildList {
         val reason = props["sys.boot.reason"].orEmpty()
@@ -34,6 +36,10 @@ data class PostMortemReport(
         if (details.isNotEmpty()) {
             add("latest system_server failure detail:")
             details.forEach { add("  $it") }
+        }
+        if (nativeCrash.isNotEmpty()) {
+            add("latest native crash (which thread aborted and why):")
+            nativeCrash.forEach { add("  $it") }
         }
         if (tombstones.isNotEmpty()) {
             add("native crash tombstones:")
@@ -57,6 +63,7 @@ object PostMortemParser {
         val details = ArrayList<String>()
         val tombs = ArrayList<String>()
         val kmsg = ArrayList<String>()
+        val native = ArrayList<String>()
         for (raw in output.lineSequence()) {
             val line = raw.trimEnd()
             when {
@@ -74,11 +81,12 @@ object PostMortemParser {
                 line.startsWith("propgrep=") -> line.removePrefix("propgrep=").trim().takeIf { it.isNotEmpty() }?.let(propGrep::add)
                 line.startsWith("dropbox: ") -> dropbox.add(line.removePrefix("dropbox: ").trim())
                 line.startsWith("detail.") -> details.add(line.removePrefix("detail.").trim())
+                line.startsWith("native: ") -> native.add(line.removePrefix("native: ").trimEnd())
                 line.startsWith("tomb: ") -> tombs.add(line.removePrefix("tomb: ").trim())
                 line.startsWith("kmsg: ") -> kmsg.add(line.removePrefix("kmsg: ").trim())
             }
         }
-        return PostMortemReport(props, settings, uptime, propGrep, dropbox, details, tombs, kmsg)
+        return PostMortemReport(props, settings, uptime, propGrep, dropbox, details, tombs, kmsg, native)
     }
 
     /**
