@@ -13,6 +13,10 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+        with:
+          # Full history: the debug versionCode is the commit count, so each
+          # build installs as an update of the previous one.
+          fetch-depth: 0
 
       - name: Setup Java
         uses: actions/setup-java@v4

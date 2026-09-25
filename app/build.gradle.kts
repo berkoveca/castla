@@ -75,6 +75,20 @@ android {
         }
     }
 
+    // One fixed debug key for every build (local and CI). CI runners otherwise
+    // generate a fresh debug keystore per run, so each APK had a different
+    // signature: Android refused to update, the user had to uninstall, and that
+    // wiped the Shizuku permission and the saved tunnel token. Debug keys are
+    // not secret; release signing is separate (keystore.properties).
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("castla-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     defaultConfig {
         applicationId = "com.castla.mirror"
         minSdk = 26
