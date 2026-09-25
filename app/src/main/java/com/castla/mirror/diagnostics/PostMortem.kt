@@ -42,6 +42,10 @@ dumpsys dropbox 2>/dev/null | grep -E '^[0-9][0-9-]* [0-9:]* (system_server_[a-z
 for T in system_server_crash system_server_watchdog system_server_wtf SYSTEM_RESTART; do
   dumpsys dropbox --print ${'$'}T 2>/dev/null | sed -n '/^=====/h;/^=====/!H;${'$'}{x;/^=====/p;}' | grep -v '^=====' | grep -v '^ *${'$'}' | head -n 16 | sed "s/^/detail.${'$'}T: /"
 done
+# logd is not restarted by a system_server crash, so its crash buffer still holds the
+# fatal signal, abort message and backtrace (crash_dump writes them there).
+logcat -b crash -d -v time 2>/dev/null | tail -n 80 | sed 's/^/crashlog: /'
+logcat -b main,system -d -v time 2>/dev/null | grep -E ' [FE]/|Watchdog|lowmemorykiller|lmkd|[Tt]hermal|ANR in|Fatal signal|Abort message' | grep -vE 'cloudflared|castla' | tail -n 40 | sed 's/^/syslog: /'
 for T in system_server_native_crash SYSTEM_TOMBSTONE; do
   dumpsys dropbox --print ${'$'}T 2>/dev/null | sed -n '/^=====/h;/^=====/!H;${'$'}{x;/^=====/p;}' | grep -E '^(Timestamp:|Cmdline:|pid: |signal |Abort message:|Cause:| *#[0-9][0-9] pc )' | head -n 30 | sed "s/^/native: ${'$'}T: /"
 done

@@ -16,7 +16,11 @@ data class PostMortemReport(
     val tombstones: List<String>,
     val kmsg: List<String>,
     /** Abort message, crashing thread and top backtrace of the newest native crash. */
-    val nativeCrash: List<String> = emptyList()
+    val nativeCrash: List<String> = emptyList(),
+    /** `logcat -b crash`: logd survives a system_server restart, so the fatal lines are still there. */
+    val crashLog: List<String> = emptyList(),
+    /** Filtered main/system log (watchdog, low memory, thermal, fatal) — only if not yet wrapped. */
+    val systemLog: List<String> = emptyList()
 ) {
     fun summaryLines(): List<String> = buildList {
         val reason = props["sys.boot.reason"].orEmpty()
@@ -41,6 +45,14 @@ data class PostMortemReport(
             add("latest native crash (which thread aborted and why):")
             nativeCrash.forEach { add("  $it") }
         }
+        if (crashLog.isNotEmpty()) {
+            add("Android crash log (logcat -b crash, survives soft restarts):")
+            crashLog.forEach { add("  $it") }
+        }
+        if (systemLog.isNotEmpty()) {
+            add("system log warnings before the restart (filtered):")
+            systemLog.forEach { add("  $it") }
+        }
         if (tombstones.isNotEmpty()) {
             add("native crash tombstones:")
             tombstones.forEach { add("  $it") }
@@ -64,6 +76,8 @@ object PostMortemParser {
         val tombs = ArrayList<String>()
         val kmsg = ArrayList<String>()
         val native = ArrayList<String>()
+        val crashLog = ArrayList<String>()
+        val systemLog = ArrayList<String>()
         for (raw in output.lineSequence()) {
             val line = raw.trimEnd()
             when {
@@ -81,12 +95,14 @@ object PostMortemParser {
                 line.startsWith("propgrep=") -> line.removePrefix("propgrep=").trim().takeIf { it.isNotEmpty() }?.let(propGrep::add)
                 line.startsWith("dropbox: ") -> dropbox.add(line.removePrefix("dropbox: ").trim())
                 line.startsWith("detail.") -> details.add(line.removePrefix("detail.").trim())
+                line.startsWith("crashlog: ") -> crashLog.add(line.removePrefix("crashlog: ").trimEnd())
+                line.startsWith("syslog: ") -> systemLog.add(line.removePrefix("syslog: ").trimEnd())
                 line.startsWith("native: ") -> native.add(line.removePrefix("native: ").trimEnd())
                 line.startsWith("tomb: ") -> tombs.add(line.removePrefix("tomb: ").trim())
                 line.startsWith("kmsg: ") -> kmsg.add(line.removePrefix("kmsg: ").trim())
             }
         }
-        return PostMortemReport(props, settings, uptime, propGrep, dropbox, details, tombs, kmsg, native)
+        return PostMortemReport(props, settings, uptime, propGrep, dropbox, details, tombs, kmsg, native, crashLog, systemLog)
     }
 
     /**

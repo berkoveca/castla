@@ -54,6 +54,23 @@ class PostMortemParserTest {
     }
 
     @Test
+    fun `logcat crash buffer and filtered system log get their own sections`() {
+        val r = PostMortemParser.parse(
+            """
+            crashlog: 09-26 01:56:49.100 F/libc    ( 1234): Fatal signal 6 (SIGABRT) in tid 1400 (InputDispatcher), pid 1234 (system_server)
+            crashlog: 09-26 01:56:49.300 F/DEBUG   (20000): Abort message: 'something failed'
+            syslog: 09-26 01:56:40.000 W/Watchdog( 1234): Blocked in handler on display thread
+            """.trimIndent()
+        )
+        assertEquals(2, r.crashLog.size)
+        assertEquals(1, r.systemLog.size)
+        val lines = r.summaryLines()
+        assertTrue(lines.contains("Android crash log (logcat -b crash, survives soft restarts):"))
+        assertTrue(lines.contains("system log warnings before the restart (filtered):"))
+        assertTrue(lines.any { it.contains("Fatal signal 6") })
+    }
+
+    @Test
     fun `summary lines include the classified boot reason and the evidence`() {
         val lines = PostMortemParser.parse(sample).summaryLines()
         val joined = lines.joinToString("\n")
