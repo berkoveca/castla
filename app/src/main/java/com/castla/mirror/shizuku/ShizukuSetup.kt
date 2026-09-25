@@ -60,7 +60,7 @@ class ShizukuSetup {
     companion object {
         private const val TAG = "ShizukuSetup"
         private const val REQUEST_CODE = 1001
-        const val USER_SERVICE_VERSION = 108
+        const val USER_SERVICE_VERSION = 109
         /** Cooldown between foreground auto-launches of the Shizuku manager. */
         private const val AUTO_LAUNCH_COOLDOWN_MS = 60_000L
         /**

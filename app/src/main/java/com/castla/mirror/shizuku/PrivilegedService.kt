@@ -315,8 +315,21 @@ class PrivilegedService : IPrivilegedService.Stub() {
         Log.i(TAG, "Surface attached to virtual display $displayId")
     }
 
+    /** Delays display release until a HOME sent to it is handled (system_server NPE otherwise). */
+    private val homeKeyGuard = HomeKeyGuard()
+
+    private fun awaitHomeSettled(displayId: Int) {
+        val waitMs = homeKeyGuard.waitBeforeRelease(displayId, SystemClock.uptimeMillis())
+        if (waitMs > 0) {
+            Log.i(TAG, "Delaying release of display $displayId by ${waitMs}ms: HOME key still pending")
+            try { Thread.sleep(waitMs) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+        }
+        homeKeyGuard.onReleased(displayId)
+    }
+
     @Synchronized
     override fun releaseVirtualDisplay(displayId: Int) {
+        if (virtualDisplays.containsKey(displayId)) awaitHomeSettled(displayId)
         virtualDisplays.remove(displayId)?.let {
             virtualDisplayNames.remove(displayId)
             try {
@@ -363,6 +376,8 @@ class PrivilegedService : IPrivilegedService.Stub() {
     }
 
     override fun execCommand(command: String): String {
+        // Recorded before exec: the key may be dispatched before `input` exits.
+        HomeKeyGuard.homeDisplayOf(command)?.let { homeKeyGuard.onHomeSent(it, SystemClock.uptimeMillis()) }
         return try {
             val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", command))
             val output = process.inputStream.bufferedReader().readText()
@@ -824,7 +839,8 @@ class PrivilegedService : IPrivilegedService.Stub() {
         if (panelForcedOff) {
             try { setPhysicalDisplayPower(true) } catch (_: Throwable) {}
         }
-        virtualDisplays.values.forEach { vd ->
+        virtualDisplays.forEach { (id, vd) ->
+            try { awaitHomeSettled(id) } catch (_: Throwable) {}
             try { vd.release() } catch (_: Throwable) {}
         }
         virtualDisplays.clear()
