@@ -214,7 +214,8 @@ class MirrorForegroundService : Service() {
         Log.i(TAG, "No session adopted the tunnel within orphan window — stopping it cleanly")
         pendingOrphanStop = null
         stopCloudflareTunnel("orphan_timeout")
-    }    private var healthHeartbeatJob: Job? = null
+    }
+    private var healthHeartbeatJob: Job? = null
     /** Last thermal mitigation label written to the file log (avoids a line every 5s headroom poll). */
     @Volatile private var lastLoggedThermalAction: String? = null
     private var shizukuSetup: ShizukuSetup? = null
