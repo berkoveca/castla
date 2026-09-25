@@ -41,7 +41,7 @@ sealed class AutoScaleDecision {
  * 5. All healthy: increment stability, step up when threshold met
  */
 object AutoScalePolicy {
-    /** Minimum auto-tier for OTT/video apps (720p60). */
+    /** Minimum auto-tier for OTT/video apps (index 1 = 800p30). */
     const val OTT_MIN_TIER = 1
     /** Consecutive stable intervals required before stepping up. */
     const val UPSCALE_THRESHOLD = 2

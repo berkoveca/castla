@@ -30,6 +30,14 @@ class StreamMathTest {
     }
 
     @Test
+    fun `uplink cap limits high bitrates and leaves low ones alone`() {
+        assertEquals(StreamMath.UPLINK_MAX_BITRATE, StreamMath.capForUplink(9_000_000))
+        assertEquals(3_000_000, StreamMath.capForUplink(3_000_000))
+        // 960p-class stream would otherwise ask for ~6.4 Mbps
+        assertEquals(4_500_000, StreamMath.capForUplink(StreamMath.calculateBaseBitrate(1536, 960)))
+    }
+
+    @Test
     fun `test secondary bitrate uses lower base and ceiling`() {
         // 1280x720: 3M * 1.0 = 3,000,000
         val secondary720p = StreamMath.calculateSecondaryBitrate(1280, 720)

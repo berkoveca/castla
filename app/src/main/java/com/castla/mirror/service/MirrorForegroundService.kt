@@ -135,16 +135,14 @@ class MirrorForegroundService : Service() {
         /** Resolution/FPS tiers for auto mode, ordered from most conservative to highest. */
         data class AutoTier(val maxHeight: Int, val fps: Int, val label: String)
         val AUTO_TIERS = listOf(
+            // 30 fps only, capped at 960p (short side; ~1.5 MP after the pixel budget).
+            // Tesla MCU2's decoder gains nothing from 60 fps, and the higher tiers only
+            // added encoder + cloudflared heat on the phone and more LTE uplink load —
+            // then thermal knocked the tier back down, rebuilding the pipeline each time.
+            // Manual 60 fps / higher resolutions remain available under Advanced.
             AutoTier(720, 30, "720p30"),
-            AutoTier(720, 60, "720p60"),
             AutoTier(800, 30, "800p30"),
-            AutoTier(800, 60, "800p60"),
-            AutoTier(960, 30, "960p30"),
-            AutoTier(960, 60, "960p60"),
-            AutoTier(1080, 30, "1080p30"),
-            AutoTier(1080, 60, "1080p60"),
-            AutoTier(1200, 30, "1200p30"),
-            AutoTier(1200, 60, "1200p60")
+            AutoTier(960, 30, "960p30")
         )
         /** Check interval for auto-scale loop */
         private const val AUTO_SCALE_INTERVAL_MS = 10_000L
@@ -257,7 +255,13 @@ class MirrorForegroundService : Service() {
     private var singleVdSplit: Boolean = false
 
     // ABR (Adaptive Bitrate) state
+    private data class RequestedViewport(val width: Int, val height: Int, val dpr: Float)
+    /** Last primary viewport the browser asked for (CSS px + DPR); source of truth for rebuilds. */
+    @Volatile private var requestedViewport: RequestedViewport? = null
+
+    /** Capped for the LTE uplink on every assignment (thermal restore, OTT boost, rebuilds). */
     private var targetBitrate: Int = 4_000_000
+        set(value) { field = StreamMath.capForUplink(value) }
     private var lastCongestionTimeMs = 0L
     private var abrJob: Job? = null
     // Proactive thermal-headroom monitor (polled, more sensitive than the status callback)
@@ -460,7 +464,7 @@ class MirrorForegroundService : Service() {
                     jpegEncoder?.setFps(15)
                     // Rebuild to restore original fps/resolution
                     if (browserConnected) {
-                        serviceScope.launch { rebuildPipeline(currentWidth, currentHeight, force = true) }
+                        serviceScope.launch { rebuildForCurrentViewport() }
                     }
                 }
             }
@@ -547,7 +551,7 @@ class MirrorForegroundService : Service() {
         }
 
         if (browserConnected && (fpsChanged || heightChanged)) {
-            serviceScope.launch { rebuildPipeline(currentWidth, currentHeight, force = true) }
+            serviceScope.launch { rebuildForCurrentViewport() }
         }
 
         val mitigationMsg = "Thermal mitigation applied: ${action.label} bitrate=${currentBitrate / 1000}kbps " +
@@ -1254,7 +1258,7 @@ class MirrorForegroundService : Service() {
         // Trigger pipeline rebuild with new settings
         if (browserConnected && currentWidth > 0 && currentHeight > 0) {
             serviceScope.launch {
-                rebuildPipeline(currentWidth, currentHeight, force = true)
+                rebuildForCurrentViewport()
             }
         }
     }
@@ -1363,7 +1367,7 @@ class MirrorForegroundService : Service() {
                     }
                 }
                 server.setCodecModeListener { mode -> onCodecModeRequest(mode) }
-                server.setViewportChangeListener { pane, w, h, layoutMode ->
+                server.setViewportChangeListener { pane, w, h, layoutMode, dpr ->
                     singleVdSplit = layoutMode == "browser_only_split" || layoutMode == "freeform_split"
                     if (pane == "secondary") {
                         if (singleVdSplit) {
@@ -1372,7 +1376,7 @@ class MirrorForegroundService : Service() {
                             onSecondaryViewportChange(w, h)
                         }
                     } else {
-                        onViewportChange(w, h)
+                        onViewportChange(w, h, dpr)
                     }
                 }
                 server.setTextInputListener { text -> injectText(text) }
@@ -2259,7 +2263,7 @@ class MirrorForegroundService : Service() {
         activeSession = ActiveLaunchSession(mode = SessionMode.STANDARD_APP, launchTarget = resolvedTarget)
         serviceScope.launch {
             try {
-                rebuildPipeline(currentWidth, currentHeight, force = true)
+                rebuildForCurrentViewport()
                 // If VD is already available (sync path), launch directly
                 val vdm = virtualDisplayManager
                 if (vdm != null && vdm.hasVirtualDisplay()) {
@@ -3063,7 +3067,7 @@ class MirrorForegroundService : Service() {
                 // redundant H.264 encoder on top of the still-live JPEG pipeline.
                 Log.i(TAG, "Browser reconnected — rebuilding pipeline")
                 serviceScope.launch {
-                    rebuildPipeline(currentWidth, currentHeight, force = true)
+                    rebuildForCurrentViewport()
                 }
                 ensureAudioCaptureState()
                 return
@@ -3464,10 +3468,27 @@ class MirrorForegroundService : Service() {
         }
     }
 
-    private fun onViewportChange(width: Int, height: Int) {
+    private fun onViewportChange(width: Int, height: Int, dpr: Float = 1f) {
+        requestedViewport = RequestedViewport(width, height, dpr)
+        FileLogger.i(TAG, "Viewport from browser: ${width}x$height css px, dpr=$dpr")
         resizeJob?.cancel()
         resizeJob = serviceScope.launch {
-            rebuildPipeline(width, height)
+            rebuildPipeline(width, height, dpr = dpr)
+        }
+    }
+
+    /**
+     * Re-applies the current limits (tier, thermal cap, codec) to the viewport the
+     * browser ASKED for. Rebuilding from [currentWidth]/[currentHeight] instead —
+     * the already-capped encode size — made every downscale permanent: once a
+     * tier or thermal step shrank the stream it could never grow back.
+     */
+    private suspend fun rebuildForCurrentViewport() {
+        val vp = requestedViewport
+        if (vp != null) {
+            rebuildPipeline(vp.width, vp.height, force = true, dpr = vp.dpr)
+        } else {
+            rebuildPipeline(currentWidth, currentHeight, force = true)
         }
     }
 
@@ -3496,16 +3517,20 @@ class MirrorForegroundService : Service() {
         return if (thermalCap != null) minOf(baseMax, thermalCap) else baseMax
     }
 
-    private suspend fun rebuildPipeline(newWidth: Int, newHeight: Int, force: Boolean = false) = pipelineMutex.withLock {
+    private suspend fun rebuildPipeline(
+        newWidth: Int,
+        newHeight: Int,
+        force: Boolean = false,
+        dpr: Float = 1f
+    ) = pipelineMutex.withLock {
+        // The tier / user / thermal limit is applied to the SHORT side (portrait-safe),
+        // after scaling CSS px by the browser's DPR — see StreamSizingPolicy.
         val effectiveMaxHeight = effectiveMaxHeightForRequest(newHeight)
-        var cappedWidth = newWidth
-        var cappedHeight = newHeight
-        
-        if (cappedHeight > effectiveMaxHeight) {
-            val scale = effectiveMaxHeight.toFloat() / cappedHeight
-            cappedHeight = effectiveMaxHeight
-            cappedWidth = (cappedWidth * scale).toInt()
-        }
+        val sized = com.castla.mirror.policy.StreamSizingPolicy.targetSize(
+            newWidth, newHeight, dpr, maxShortSide = effectiveMaxHeight
+        )
+        var cappedWidth = sized.first
+        var cappedHeight = sized.second
 
         // MJPEG decode ceiling (Tesla MCU2): cap pixels so the browser can keep up.
         // OTT/video gets the wider budget (~1920x864), everything else stays smooth (~1600x720).
@@ -3544,6 +3569,8 @@ class MirrorForegroundService : Service() {
             TAG,
             "Rebuilding pipeline requested=${newWidth}x${newHeight} -> ${width}x${height} effectiveMaxHeight=$effectiveMaxHeight splitActive=${shouldUseRequestedHeightForSplit()} force=$force"
         )
+        FileLogger.i(TAG, "Encode ${width}x$height (requested ${newWidth}x$newHeight css dpr=$dpr, " +
+            "maxShortSide=$effectiveMaxHeight) ${thermalFpsOverride ?: currentFps}fps ${targetBitrate / 1000}kbps codec=$currentCodecMode")
 
         try {
             val surface = if (currentCodecMode == "mjpeg") {
@@ -3765,7 +3792,7 @@ class MirrorForegroundService : Service() {
             kotlinx.coroutines.delay(EncoderRecoveryPolicy.rebuildDelayMs(encoderErrorCount))
             if (browserConnected && !isCleanupInProgress) {
                 Log.w(TAG, "Rebuilding pipeline after encoder error #$encoderErrorCount")
-                rebuildPipeline(currentWidth, currentHeight, force = true)
+                rebuildForCurrentViewport()
             }
         }
     }
@@ -3789,7 +3816,7 @@ class MirrorForegroundService : Service() {
         Log.i(TAG, "Codec mode request: $requested — delegating to rebuildPipeline")
         serviceScope.launch {
             try {
-                rebuildPipeline(currentWidth, currentHeight, force = true)
+                rebuildForCurrentViewport()
                 if (!singleVdSplit && secondaryWidth > 0 && secondaryHeight > 0) {
                     rebuildSecondaryPipeline(secondaryWidth, secondaryHeight)
                 }

@@ -20,10 +20,25 @@ class MseDecoder {
         this.lastDecodeTime = 0;
         this.videoDuration = 0;
 
-        // Target latency management
-        this.targetLatency = 0.15; // 150ms buffer
-        this.maxLatency = 0.5; // 500ms max allowed before seek
+        // Target latency management (see MseDecoder.latencyAction)
+        this.targetLatency = MseDecoder.TARGET_LATENCY;
         this.latencyCheckInterval = null;
+    }
+
+    /**
+     * Live-edge steering for a jittery LTE + tunnel link. Frames arrive in
+     * bursts, so latency spikes are normal; the old policy hard-seeked whenever
+     * latency passed 0.5 s, and every seek flushes the (hardware) decoder — a
+     * visible hitch several times a minute. Now: speed playback up slightly to
+     * drain a backlog, and only seek when we are hopelessly behind.
+     * Returns { seek, rate } or null (inside the hysteresis band: keep the rate).
+     */
+    static latencyAction(latency) {
+        if (!(latency >= 0)) return null;
+        if (latency > MseDecoder.HARD_SEEK_LATENCY) return { seek: true, rate: 1.0 };
+        if (latency > MseDecoder.CATCHUP_START_LATENCY) return { seek: false, rate: MseDecoder.CATCHUP_RATE };
+        if (latency < MseDecoder.CATCHUP_STOP_LATENCY) return { seek: false, rate: 1.0 };
+        return null;
     }
 
     static isSupported() {
@@ -174,15 +189,25 @@ class MseDecoder {
             const currentTime = this.video.currentTime;
             const latency = bufferedEnd - currentTime;
 
-            if (latency > this.maxLatency) {
-                console.log(`[MSE] Latency too high (${latency.toFixed(2)}s). Seeking to live edge.`);
-                this.video.currentTime = Math.max(0, bufferedEnd - this.targetLatency);
+            const action = MseDecoder.latencyAction(latency);
+            if (action) {
+                if (action.seek) {
+                    console.log(`[MSE] Latency ${latency.toFixed(2)}s — seeking to live edge.`);
+                    this.video.currentTime = Math.max(0, bufferedEnd - this.targetLatency);
+                }
+                if (this.video.playbackRate !== action.rate) this.video.playbackRate = action.rate;
+            }
+
+            // A stall (e.g. after a burst gap) can leave the element paused.
+            if (this.video.paused && this.video.readyState >= 2) {
+                const p = this.video.play();
+                if (p && p.catch) p.catch(() => {});
             }
 
             if (currentTime > 10 && !this.updating) {
                 this.flushBuffer();
             }
-        }, 1000);
+        }, 500);
     }
 
     decode(data) {
@@ -354,3 +379,11 @@ class MseDecoder {
         this.ready = false;
     }
 }
+
+MseDecoder.TARGET_LATENCY = 0.3;        // where a hard seek lands (s behind live edge)
+MseDecoder.CATCHUP_START_LATENCY = 0.6; // start playing faster above this
+MseDecoder.CATCHUP_STOP_LATENCY = 0.35; // back to 1x below this
+MseDecoder.CATCHUP_RATE = 1.1;
+MseDecoder.HARD_SEEK_LATENCY = 2.0;     // hopelessly behind: jump
+
+if (typeof module !== 'undefined' && module.exports) module.exports = { MseDecoder };

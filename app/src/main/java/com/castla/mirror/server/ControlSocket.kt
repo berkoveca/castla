@@ -70,8 +70,10 @@ class ControlSocket(
                     val height = json.optInt("height", 0)
                     val pane = json.optString("pane", "primary")
                     val layoutMode = json.optString("layoutMode", "")
+                    // CSS px → physical px factor; older clients don't send it.
+                    val dpr = json.optDouble("dpr", 1.0).toFloat()
                     if (width > 0 && height > 0) {
-                        server.onViewportChange(pane, width, height, layoutMode)
+                        server.onViewportChange(pane, width, height, layoutMode, dpr)
                     }
                 }
                 "textInput" -> {

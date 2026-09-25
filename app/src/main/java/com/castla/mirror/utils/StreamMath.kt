@@ -88,6 +88,16 @@ object StreamMath {
     }
 
     /**
+     * Ceiling for any primary stream bitrate. All video reaches the car through
+     * the Cloudflare tunnel, i.e. over the phone's cellular uplink; asking the
+     * encoder for more only builds a send backlog (latency, ABR thrash) and heat.
+     * 4.5 Mbps is ample for 30 fps screen content (maps, UI) up to ~1.5 MP.
+     */
+    const val UPLINK_MAX_BITRATE = 4_500_000
+
+    fun capForUplink(bitrate: Int): Int = bitrate.coerceAtMost(UPLINK_MAX_BITRATE)
+
+    /**
      * Calculates bitrate for secondary/split-screen streams.
      * Uses a lower base (3Mbps) and tighter ceiling since secondary
      * content shares bandwidth with the primary stream.

@@ -31,7 +31,7 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
 
     private var onTouchListener: ((TouchEvent) -> Unit)? = null
     private var onCodecModeListener: ((String) -> Unit)? = null
-    private var onViewportChangeListener: ((String, Int, Int, String) -> Unit)? = null
+    private var onViewportChangeListener: ((String, Int, Int, String, Float) -> Unit)? = null
     private var onTextInputListener: ((String) -> Unit)? = null
     private var onKeyEventListener: ((Int) -> Unit)? = null
     private var onCompositionUpdateListener: ((Int, String) -> Unit)? = null
@@ -69,7 +69,7 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         onCodecModeListener = listener
     }
 
-    fun setViewportChangeListener(listener: (String, Int, Int, String) -> Unit) {
+    fun setViewportChangeListener(listener: (String, Int, Int, String, Float) -> Unit) {
         onViewportChangeListener = listener
     }
 
@@ -365,8 +365,8 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         onCodecModeListener?.invoke(mode)
     }
     
-    fun onViewportChange(pane: String, width: Int, height: Int, layoutMode: String = "") {
-        onViewportChangeListener?.invoke(pane, width, height, layoutMode)
+    fun onViewportChange(pane: String, width: Int, height: Int, layoutMode: String = "", dpr: Float = 1f) {
+        onViewportChangeListener?.invoke(pane, width, height, layoutMode, dpr)
     }
     
     fun onTextInput(text: String) {

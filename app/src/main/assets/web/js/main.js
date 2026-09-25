@@ -25,6 +25,8 @@ let serverStreamingMode = null;
 let mseCodecString = null;
 let launchGuardUntil = 0; // block accidental launches after splash dismiss
 let codecMode = 'h264'; // Default to h264, switch to mjpeg if needed
+// Tesla in-car browser (MCU2/MCU3 report "Tesla/<version>"; MCU1 "QtCarBrowser").
+const IS_TESLA_BROWSER = /Tesla\/|QtCarBrowser/i.test(navigator.userAgent || '');
 
 // Playback profile system:
 //   userPreferredProfile — what the user manually chose (persisted in localStorage)
@@ -540,6 +542,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 pane: 'primary',
                 width: fullWidth,
                 height: fullHeight,
+                dpr: window.devicePixelRatio || 1,
                 fitMode: getEffectivePrimaryFitMode(),
                 layoutMode: 'single'
             }));
@@ -847,6 +850,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         const urlMode = params.get('mode');
         let mode = urlMode || serverStreamingMode || 'auto';
         if (mode === 'auto' || !mode) {
+            // Tesla's in-car Chromium decodes <video>/MSE H.264 in hardware; a
+            // WebCodecs VideoDecoder (present on newer builds) may fall back to
+            // software on the MCU2 Atom and stutter. Prefer MSE there.
+            if (IS_TESLA_BROWSER && MseDecoder.isSupported()) return 'mse';
             if (typeof WebCodecs !== 'undefined' || window.VideoDecoder) return 'webcodecs';
             if (MseDecoder.isSupported()) return 'mse';
             return 'mjpeg';
@@ -1016,7 +1023,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     // stall), the last frame would otherwise stay frozen on screen. Bind the
     // timer to the specific socket instance so a stale fire cannot close a
     // freshly reconnected socket.
-    const FRAME_TIMEOUT_MS = 4000;
+    // Static screens still produce >=1 frame/s (encoder repeats the last frame).
+    // 8s rides out an LTE cell handover instead of tearing the socket down and
+    // paying a fresh WebSocket + tunnel handshake for a transient stall.
+    const FRAME_TIMEOUT_MS = 8000;
     let frameWatchdogTimer = null;
 
     function armFrameWatchdog(socket) {
@@ -1102,6 +1112,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 pane: 'primary',
                 width: primaryViewport.width,
                 height: primaryViewport.height,
+                // CSS px → physical px. The phone scales the encode size by this
+                // (clamped/capped server-side) so the car doesn't upscale a soft image.
+                dpr: window.devicePixelRatio || 1,
                 fitMode: getEffectivePrimaryFitMode(),
                 layoutMode: streamPolicy.layoutMode
             }));
