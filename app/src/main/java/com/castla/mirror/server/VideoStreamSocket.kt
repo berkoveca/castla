@@ -58,7 +58,7 @@ class VideoStreamSocket(
     override fun onOpen() {
         server.registerVideoSocket(channel, this)
         sendThread.start()
-        val ip = runCatching { handshake.remoteIpAddress }.getOrNull()
+        val ip = runCatching { handshakeRequest.remoteIpAddress }.getOrNull()
         MirrorDiagnostics.log(DiagnosticEvent.SOCKET_OPENED,
             "[$channel] remote=${DiagnosticSanitizer.maskIp(ip)}")
     }

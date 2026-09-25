@@ -19,7 +19,7 @@ class AudioStreamSocket(
 
     override fun onOpen() {
         server.registerAudioSocket(this)
-        val ip = runCatching { handshake.remoteIpAddress }.getOrNull()
+        val ip = runCatching { handshakeRequest.remoteIpAddress }.getOrNull()
         MirrorDiagnostics.log(DiagnosticEvent.SOCKET_OPENED,
             "[audio] remote=${DiagnosticSanitizer.maskIp(ip)}")
     }

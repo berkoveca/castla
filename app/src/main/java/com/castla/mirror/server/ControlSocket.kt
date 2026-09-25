@@ -23,7 +23,7 @@ class ControlSocket(
 
     override fun onOpen() {
         server.registerControlSocket(this)
-        val ip = runCatching { handshake.remoteIpAddress }.getOrNull()
+        val ip = runCatching { handshakeRequest.remoteIpAddress }.getOrNull()
         MirrorDiagnostics.log(DiagnosticEvent.SOCKET_OPENED,
             "[control] remote=${DiagnosticSanitizer.maskIp(ip)}")
     }
