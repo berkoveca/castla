@@ -2,9 +2,10 @@
 
 This document ranks what in Castla could **reboot the phone** or **kill or drop the
 cloudflared tunnel**. It then explains how to read the diagnostic report that
-**Settings → Logs → Copy Recent** now produces. None of the suspects below is fixed
-in the logging change. They are hypotheses, and the new logs are built to confirm or
-rule out each one.
+**Settings → Logs → Copy Recent** now produces. The suspects are hypotheses, and the
+new logs are built to confirm or rule out each one. R1, R3, R4, T2 and T3 have since
+been mitigated in code (see the **Status** lines). R2 and T1 are reduced but not
+eliminated.
 
 ## TL;DR: most likely causes
 
@@ -23,7 +24,7 @@ rule out each one.
 ### R1: panel-off on every power-button press (most likely)
 
 `MirrorForegroundService` registers for `ACTION_SCREEN_OFF`
-(`MirrorForegroundService.kt:409`). `onPhoneScreenOff()` asks `ScreenOffPolicy` what
+(`MirrorForegroundService.kt`). `onPhoneScreenOff()` asks `ScreenOffPolicy` what
 to do (`ScreenOffPolicy.kt:57`). Because `isPanelOffSupported` defaults to `true`,
 the answer is `TURN_PANEL_OFF`. The privileged service then calls
 `SurfaceControl.setDisplayPowerMode(token, OFF)` (`PrivilegedService.kt:915`). On
@@ -52,8 +53,8 @@ last line before a reboot is the `→` line, R1 is confirmed. The post-mortem se
 then shows `SYSTEM_TOMBSTONE` for `surfaceflinger`, or a `system_server_watchdog`
 record.
 
-**Suggested fix (not done):** only turn the panel off from the explicit UI button.
-On `ACTION_SCREEN_OFF`, use the keep-alive path, or do nothing.
+**Status: fixed.** `ScreenOffPolicy.onSystemScreenOff()` always takes the keep-alive
+path. Panel-off only happens from the explicit Screen Off button.
 
 ### R2: thermal shutdown
 
@@ -65,6 +66,9 @@ windshield and charging, and the framework will eventually call `shutdown()` at
 reacts to the SoC thermal status and headroom. It does not see battery temperature or
 radio heat, and until now none of this was persisted.
 
+**Status: reduced.** Auto quality now stays at 30 fps and at most 960p. The stream
+bitrate is capped at 4.5 Mbps. Keyframes come every 2 s instead of every 1 s.
+
 **What the new logs show:** a 60 s `Health` heartbeat line with
 `thermal=… headroom10s=… batteryTemp=…C charging=…`. Every thermal status change and
 mitigation step is logged. After a reboot, the post-mortem boot reason reads
@@ -73,8 +77,8 @@ shows the last heartbeat from before the reboot.
 
 ### R3: virtual-display churn from tunnel blips
 
-`DisconnectPolicy.DEFAULT_GRACE_MS` is 3 s (`DisconnectPolicy.kt:14`). If the browser
-is gone for longer, `onBrowserDisconnected()` releases the encoders and the virtual
+`DisconnectPolicy.DEFAULT_GRACE_MS` was 3 s. If the browser
+was gone for longer, `onBrowserDisconnected()` releases the encoders and the virtual
 display, and the next reconnect recreates them and relaunches the app on the VD. A
 cloudflared reconnect (process restart, then edge registration, then browser
 reconnect) takes longer than 3 s. With T2 making drops frequent, a flapping tunnel
@@ -86,8 +90,8 @@ session`, `→ createVirtualDisplay`, `→ release primary VD`, plus the existin
 `WS_CONNECTED`, `SOCKET_CLOSED` and `VD_CREATED` events. Count them per minute before
 a reboot.
 
-**Suggested fix (not done):** a much longer grace period (for example 20–30 s) in
-tunnel mode.
+**Status: fixed.** The grace period is now 20 s (30 s with the screen off), and the
+browser's stall watchdog is 8 s instead of 4 s.
 
 ### R4: orphaned-VD safety net
 
@@ -102,7 +106,8 @@ tunnel mode.
 - `destroy()` always calls `setPhysicalDisplayPower(true)`, even when the panel was
   never turned off. That runs the risky token-resolution path during teardown.
 
-**Suggested fix (not done):** keep the token in a field, and synchronize the maps.
+**Status: fixed.** The token is kept in a field, the VD map operations are
+`@Synchronized`, and `destroy()` only restores the panel if the app turned it off.
 
 ## cloudflared tunnel drops
 
@@ -137,7 +142,7 @@ Gaps between `Health` heartbeats mean the process was frozen.
 
 ### T2: QUIC plus a single edge connection
 
-The tunnel runs with `--ha-connections 1` (`CloudflareTunnelManager.kt:567`) and the
+The tunnel runs with `--ha-connections 1` (now built by `CloudflaredArgs.kt`) and the
 default protocol, which is QUIC over UDP. Mobile carriers and phone hotspots time out
 idle UDP NAT mappings aggressively. With only one connection, any QUIC hiccup takes
 the site down until cloudflared reconnects
@@ -148,7 +153,8 @@ the site down until cloudflared reconnects
 example `Failed to dial a quic connection`, `timeout: no recent network activity`,
 `Unregistered tunnel connection`), rate-limited and with the token redacted.
 
-**Suggested fix (not done):** add `--protocol http2`, and use `--ha-connections 2`.
+**Status: fixed.** cloudflared now runs with `--protocol http2 --ha-connections 2`
+(`CloudflaredArgs`).
 
 ### T3: which binary actually ships
 
@@ -159,6 +165,8 @@ example `Failed to dial a quic connection`, `timeout: no recent network activity
   which Android does not have. This is the exact problem commit `79d4eb3` fixed, but
   only in `android.yml`. A binary not built for Android can also hit Android's seccomp
   filter (SIGSYS, exit 159).
+
+**Status: fixed.** `release.yml` now bundles the same Termux build as `android.yml`.
 
 **What the new logs show:** on the first start of each app process:
 `cloudflared binary: size=…KB build=bionic (interp=/system/bin/linker64 …) version="…"`
