@@ -212,7 +212,12 @@ class AudioPlayer {
             }
         };
 
-        this.socket.onclose = () => console.log('[Audio] WebSocket disconnected');
+        this.socket.onclose = () => {
+            console.log('[Audio] WebSocket disconnected');
+            // Audio used to stay dead if only its socket dropped; let the page's
+            // shared reconnect loop (which re-opens any closed socket) pick it up.
+            if (typeof this.onDisconnected === 'function') this.onDisconnected();
+        };
     }
 
     stop() {

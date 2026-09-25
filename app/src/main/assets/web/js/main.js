@@ -1135,6 +1135,21 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
+    // Control-socket liveness. The phone sends {"type":"ka"} every 20 s
+    // (KeepAlivePolicy.SERVER_INTERVAL_MS). A socket that has been silent for
+    // 50 s (CLIENT_SILENCE_TIMEOUT_MS) is half-open — typical after an LTE cell
+    // change — and the browser would otherwise keep it "OPEN" forever, silently
+    // swallowing touches. Close it so the normal reconnect path takes over.
+    const CONTROL_SILENCE_TIMEOUT_MS = 50000;
+    let lastControlMessageAt = Date.now();
+    setInterval(() => {
+        if (!controlSocket || controlSocket.readyState !== WebSocket.OPEN) return;
+        if (Date.now() - lastControlMessageAt > CONTROL_SILENCE_TIMEOUT_MS) {
+            console.warn('[Main] Control socket silent for', CONTROL_SILENCE_TIMEOUT_MS, 'ms — reconnecting');
+            try { controlSocket.close(); } catch (_) {}
+        }
+    }, 5000);
+
     function connectControl() {
         const wsUrl = `${wsProtocol}://${host}/ws/control`;
         if (controlSocket) {
@@ -1144,6 +1159,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         controlSocket.onopen = () => {
             reconnectAttempts = 0;
+            lastControlMessageAt = Date.now();
             closeInputBubble(true);
             if (touchHandler) touchHandler.destroy();
             const renderer = (decoder && decoder.renderer) ? decoder.renderer : null;
@@ -1229,6 +1245,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         };
 
         controlSocket.onmessage = (event) => {
+            lastControlMessageAt = Date.now();
             try {
                 const msg = JSON.parse(event.data);
                 if (msg.type === 'resolutionChanged') {
@@ -1704,6 +1721,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     audioPlayer = new AudioPlayer();
+    audioPlayer.onDisconnected = () => scheduleReconnect();
     const splashScreen = document.getElementById('splash-screen');
     const splashUnmute = document.getElementById('splash-unmute');
     let splashReady = false;

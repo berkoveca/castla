@@ -22,12 +22,51 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         private const val TAG = "MirrorServer"
         const val DEFAULT_PORT = 9090
         private const val COOKIE_AUTH = "castla_auth"
+        private val REPLAYED_TYPES = listOf("streamingMode", "streamCodec")
     }
 
-    private val primaryVideoSockets = mutableSetOf<VideoStreamSocket>()
-    private val secondaryVideoSockets = mutableSetOf<VideoStreamSocket>()
-    private val controlSockets = mutableSetOf<ControlSocket>()
-    private val audioSockets = mutableSetOf<AudioStreamSocket>()
+    // Copy-on-write: sockets are added/removed on NanoHTTPD request threads while the
+    // encoder/audio threads iterate these sets to broadcast. Plain HashSets threw
+    // ConcurrentModificationException (lost frames) under rapid reconnects.
+    private val primaryVideoSockets = java.util.concurrent.CopyOnWriteArraySet<VideoStreamSocket>()
+    private val secondaryVideoSockets = java.util.concurrent.CopyOnWriteArraySet<VideoStreamSocket>()
+    private val controlSockets = java.util.concurrent.CopyOnWriteArraySet<ControlSocket>()
+    private val audioSockets = java.util.concurrent.CopyOnWriteArraySet<AudioStreamSocket>()
+
+    /** Latest control message per replayable type, sent to every new control socket. */
+    private val replayedControlMessages = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    private val keepAliveExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+        Thread(r, "WS-KeepAlive").apply { isDaemon = true }
+    }.also { ex ->
+        val period = com.castla.mirror.policy.KeepAlivePolicy.SERVER_INTERVAL_MS
+        ex.scheduleWithFixedDelay({ sendKeepAlives() }, period, period, java.util.concurrent.TimeUnit.MILLISECONDS)
+    }
+
+    /**
+     * Keeps every socket above Cloudflare's 100 s idle cutoff and surfaces
+     * half-open connections: a failed ping throws, and the socket is dropped.
+     * Control gets an app-level message because browsers hide ping frames from
+     * JS, and the page uses it to detect a dead control socket.
+     */
+    private fun sendKeepAlives() {
+        try {
+            val ka = "{\"type\":\"ka\",\"t\":${System.currentTimeMillis()}}"
+            for (s in controlSockets) {
+                try { s.send(ka) } catch (e: Exception) { unregisterControlSocket(s) }
+            }
+            for (s in primaryVideoSockets) runCatching { s.ping(ByteArray(0)) }
+            for (s in secondaryVideoSockets) runCatching { s.ping(ByteArray(0)) }
+            for (s in audioSockets) runCatching { s.ping(ByteArray(0)) }
+        } catch (t: Throwable) {
+            Log.w(TAG, "keepalive pass failed", t)
+        }
+    }
+
+    override fun stop() {
+        keepAliveExecutor.shutdownNow()
+        super.stop()
+    }
 
     private var onTouchListener: ((TouchEvent) -> Unit)? = null
     private var onCodecModeListener: ((String) -> Unit)? = null
@@ -189,6 +228,12 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
             try { socket.send(json) }
             catch (e: Exception) { Log.w(TAG, "Failed to send cached thermal status", e) }
         }
+        // ...and the streaming mode / codec hint: they are broadcast once per
+        // browser connection, so a control socket that reconnected inside the grace
+        // window (page reload) would otherwise never learn them.
+        for (json in replayedControlMessages.values) {
+            try { socket.send(json) } catch (e: Exception) { Log.w(TAG, "Failed to replay control message", e) }
+        }
 
         updateConnectionState()
     }
@@ -336,6 +381,9 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         // Cache thermal status so new control sockets receive it immediately
         if (json.contains("\"thermalStatus\"")) {
             cachedThermalJson = json
+        }
+        for (type in REPLAYED_TYPES) {
+            if (json.contains("\"type\":\"$type\"")) replayedControlMessages[type] = json
         }
         val deadSockets = mutableListOf<ControlSocket>()
         for (socket in controlSockets) {
