@@ -117,6 +117,8 @@
     <string name="settings_share_logs">Share Logs</string>
     <string name="settings_copy_logs">Copy Recent</string>
     <string name="settings_advanced">Advanced</string>
+    <string name="settings_apply_recommended">Use recommended Tesla settings</string>
+    <string name="settings_apply_recommended_hint">720p · 30 fps · automatic decoder · audio off (use Bluetooth). Tuned for the Tesla MCU2 browser over mobile data.</string>
     <string name="settings_advanced_hint">Resolution, codec, frame rate, audio, language. Defaults are tuned for the Tesla browser.</string>
     <string name="settings_logs_empty">No logs available yet.</string>
     <string name="settings_logs_copied">Recent logs copied to clipboard.</string>

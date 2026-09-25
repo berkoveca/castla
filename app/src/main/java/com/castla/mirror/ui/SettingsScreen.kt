@@ -431,6 +431,31 @@ fun SettingsScreen(
             AnimatedVisibility(visible = showAdvanced) {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Spacer(modifier = Modifier.height(12.dp))
+            // One tap back to the combination confirmed working on the Tesla MCU2
+            // browser over the tunnel: fixed 720p, 30 fps, automatic decoder, no audio.
+            OutlinedButton(
+                onClick = {
+                    if (!isStreaming) onSettingsChanged(
+                        settings.copy(
+                            maxResolution = StreamSettings.Resolution.RES_720,
+                            fps = 30,
+                            streamingMode = StreamingMode.AUTO,
+                            audioEnabled = false
+                        )
+                    )
+                },
+                enabled = !isStreaming,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(stringResource(R.string.settings_apply_recommended))
+            }
+            Text(
+                text = stringResource(R.string.settings_apply_recommended_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.6f),
+                modifier = Modifier.padding(top = 6.dp, bottom = 20.dp)
+            )
 
             // Resolution
             SettingSection(title = stringResource(R.string.settings_max_resolution)) {
