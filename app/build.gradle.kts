@@ -33,6 +33,20 @@ fun gitLatestSemverTag(): String? = try {
 
 // Total commit count — used as debug versionCode so each rebuild after pulling
 // new commits gets a higher code than any previously installed debug build.
+// Short commit id baked into BuildConfig so diagnostic reports name the exact build
+// (CI's shallow checkout makes the commit-count versionCode always 1).
+fun gitShortSha(): String = try {
+    val proc = ProcessBuilder("git", "rev-parse", "--short=8", "HEAD")
+        .directory(rootProject.projectDir)
+        .redirectErrorStream(true)
+        .start()
+    if (proc.waitFor(2, TimeUnit.SECONDS)) {
+        proc.inputStream.bufferedReader().readText().trim().takeIf { it.matches(Regex("[0-9a-f]{4,40}")) } ?: "unknown"
+    } else {
+        proc.destroyForcibly(); "unknown"
+    }
+} catch (_: Throwable) { "unknown" }
+
 fun gitCommitCount(): Int = try {
     val proc = ProcessBuilder("git", "rev-list", "--count", "HEAD")
         .directory(rootProject.projectDir)
@@ -66,6 +80,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 11
+        buildConfigField("String", "GIT_SHA", "\"${gitShortSha()}\"")
         versionName = "1.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

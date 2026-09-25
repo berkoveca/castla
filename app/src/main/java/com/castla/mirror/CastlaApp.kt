@@ -16,7 +16,7 @@ class CastlaApp : Application() {
     override fun onCreate() {
         super.onCreate()
         FileLogger.init(this)
-        FileLogger.i("App", "APP_START pid=${Process.myPid()} version=${BuildConfig.VERSION_NAME}(${BuildConfig.VERSION_CODE}) " +
+        FileLogger.i("App", "APP_START pid=${Process.myPid()} version=${BuildConfig.VERSION_NAME}(${BuildConfig.VERSION_CODE}) build=${BuildConfig.GIT_SHA} " +
             "${BuildConfig.BUILD_TYPE} device=${Build.MANUFACTURER} ${Build.MODEL} android=${Build.VERSION.RELEASE}(${Build.VERSION.SDK_INT})")
         // Must run before any session can start: it reads what the previous process
         // left behind (reboot? died mid-session? last heartbeat?) and then resets it.

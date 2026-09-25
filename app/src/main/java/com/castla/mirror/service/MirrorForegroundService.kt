@@ -1433,6 +1433,7 @@ class MirrorForegroundService : Service() {
                 server.setAudioSocketConnectedListener { audioOrchestrator?.onAudioSocketConnected() }
                 server.setGoHomeListener {
                     Log.i(TAG, "Navigating to home requested by Web Launcher")
+                    FileLogger.i(TAG, "Go home from car: vd=${virtualDisplayManager?.getDisplayId()} app=$currentVdApp", durable = true)
                     val previousApp = currentVdApp
                     dismissSplitPresentation(clearState = true)
                     if (!singleVdSplit) {
@@ -1456,11 +1457,13 @@ class MirrorForegroundService : Service() {
 
                 server.setCloseSplitListener {
                     Log.i(TAG, "Close split requested — restoring primary fullscreen")
+                    FileLogger.i(TAG, "Close split from car", durable = true)
                     closeFreeformSplit()
                 }
 
                 server.setDisplayDensityListener { scale ->
                     Log.i(TAG, "Display density scale changed to $scale")
+                    FileLogger.i(TAG, "Density from car: scale=$scale", durable = true)
                     dpiScale = scale
                     // Only update DPI on the existing VD — do NOT force-rebuild
                     // the pipeline. A force rebuild uses currentWidth/currentHeight
@@ -3532,6 +3535,7 @@ class MirrorForegroundService : Service() {
         serviceScope.launch(Dispatchers.IO) {
             try {
                 val displayId = activeInputDisplayId()
+                FileLogger.i(TAG, "Key from car: keyCode=$keyCode display=$displayId", durable = keyCode == 3 || keyCode == 4)
                 val cmd = if (displayId > 0) "input -d $displayId keyevent $keyCode" else "input keyevent $keyCode"
                 shizukuSetup?.privilegedService?.execCommand(cmd)
             } catch (e: Exception) {}

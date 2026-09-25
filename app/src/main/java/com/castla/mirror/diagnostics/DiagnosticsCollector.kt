@@ -36,7 +36,7 @@ object DiagnosticsCollector {
     private fun appDeviceLines(context: Context): List<String> {
         val boot = CrashBreadcrumbs.currentBoot(context)
         return listOf(
-            "app=${BuildConfig.APPLICATION_ID} ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) ${BuildConfig.BUILD_TYPE}",
+            "app=${BuildConfig.APPLICATION_ID} ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) ${BuildConfig.BUILD_TYPE} build=${BuildConfig.GIT_SHA}",
             "device=${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE}) android=${Build.VERSION.RELEASE} " +
                 "sdk=${Build.VERSION.SDK_INT} patch=${Build.VERSION.SECURITY_PATCH}",
             "now=${CrashBreadcrumbs.fmt(System.currentTimeMillis())} uptime=${CrashBreadcrumbs.formatDuration(SystemClock.elapsedRealtime())} " +

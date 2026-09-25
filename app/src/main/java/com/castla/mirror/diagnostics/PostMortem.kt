@@ -76,5 +76,5 @@ true
 
     fun summaryLines(): List<String> =
         lastReport?.summaryLines()
-            ?: listOf("(not collected — needs the Shizuku privileged service to have connected in this app run)")
+            ?: listOf("(not collected yet — Shizuku has not connected in this app run. Wait ~15 s after opening Castla, then Copy Recent again)")
 }
