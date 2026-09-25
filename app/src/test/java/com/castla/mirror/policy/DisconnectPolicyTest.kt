@@ -8,13 +8,21 @@ class DisconnectPolicyTest {
     // ── Grace period ──
 
     @Test
-    fun `default grace is 3 seconds when screen is on`() {
-        assertEquals(3_000L, DisconnectPolicy.graceMs(isScreenOff = false))
+    fun `default grace is 20 seconds when screen is on`() {
+        assertEquals(20_000L, DisconnectPolicy.graceMs(isScreenOff = false))
     }
 
     @Test
-    fun `extended grace is 15 seconds when screen is off`() {
-        assertEquals(15_000L, DisconnectPolicy.graceMs(isScreenOff = true))
+    fun `extended grace is 30 seconds when screen is off`() {
+        assertEquals(30_000L, DisconnectPolicy.graceMs(isScreenOff = true))
+    }
+
+    @Test
+    fun `default grace outlasts a tunnel reconnect plus the client's first backoffs`() {
+        // cloudflared restart delay + edge registration (~5s) + browser backoff 2s, 3s, 4.5s
+        val tunnelRestart = TunnelRestartPolicy.RESTART_BASE_DELAY_MS + 5_000L
+        val clientBackoff = (0..2).sumOf { ClientReconnectPolicy.delayMs(it) }
+        assertTrue(DisconnectPolicy.DEFAULT_GRACE_MS >= tunnelRestart + clientBackoff)
     }
 
     // ── Teardown decision ──

@@ -561,13 +561,7 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
             throw IllegalStateException("cloudflared binary not found at ${binary.absolutePath}")
         }
 
-        val cmd = listOf(
-            binary.absolutePath, "tunnel",
-            "--edge-ip-version", "4",
-            "--ha-connections", "1",
-            "--no-autoupdate",
-            "run", "--token", token
-        )
+        val cmd = CloudflaredArgs.namedTunnel(binary.absolutePath, token)
         Log.i(TAG, "Starting NAMED tunnel: cloudflared tunnel run <redacted>")
 
         val pb = ProcessBuilder(cmd)
@@ -578,7 +572,7 @@ class CloudflareTunnelManager private constructor(private val context: Context) 
         process = proc
         processStartedAtMs = SystemClock.elapsedRealtime()
         val gen = processGeneration
-        FileLogger.i(TAG, "cloudflared spawned (generation=$gen) args=${cmd.drop(1).dropLast(1).joinToString(" ")} <redacted>")
+        FileLogger.i(TAG, "cloudflared spawned (generation=$gen) args=${CloudflaredArgs.redacted(cmd)}")
         clearStderr()
         collectStderr(proc, gen)
 
