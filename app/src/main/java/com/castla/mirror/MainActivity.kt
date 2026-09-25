@@ -181,8 +181,42 @@ class MainActivity : AppCompatActivity() {
         Log.i(TAG, "Startup permissions: $results")
     }
 
+    /**
+     * If the previous run crashed, offer to copy the full diagnostic report (it
+     * contains the stack trace) right here — the Logs buttons live in Settings,
+     * which may be the very screen that crashed.
+     */
+    private fun offerCrashReportIfAny() {
+        val marker = java.io.File(filesDir, CastlaApp.CRASH_MARKER)
+        if (!marker.exists()) return
+        val summary = try { marker.readText().lineSequence().take(3).joinToString("\n") } catch (_: Throwable) { "" }
+        marker.delete()
+        try {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("Castla crashed last time")
+                .setMessage("$summary\n\nCopy the crash report to the clipboard to share it?")
+                .setPositiveButton("Copy report") { _, _ ->
+                    Thread {
+                        val report = try {
+                            com.castla.mirror.diagnostics.DiagnosticsCollector.buildReport(this)
+                        } catch (t: Throwable) {
+                            "report failed: $t\n$summary"
+                        }
+                        runOnUiThread {
+                            val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            cm.setPrimaryClip(android.content.ClipData.newPlainText("castla-crash", report))
+                            android.widget.Toast.makeText(this, "Crash report copied", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    }.start()
+                }
+                .setNegativeButton("Dismiss", null)
+                .show()
+        } catch (_: Throwable) { }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        offerCrashReportIfAny()
 
         updateManager = UpdateManagerFactory.create()
         updateManager.checkForUpdate(this)

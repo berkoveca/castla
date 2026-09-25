@@ -8,6 +8,11 @@ import com.castla.mirror.diagnostics.DiagnosticNames
 import com.castla.mirror.diagnostics.FileLogger
 
 class CastlaApp : Application() {
+    companion object {
+        /** Written by the crash handler, consumed by MainActivity on the next start. */
+        const val CRASH_MARKER = "last_crash.txt"
+    }
+
     override fun onCreate() {
         super.onCreate()
         FileLogger.init(this)
@@ -20,6 +25,14 @@ class CastlaApp : Application() {
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
                 FileLogger.e("UEH", "Uncaught on ${thread.name}", throwable)
+            } catch (_: Throwable) {
+            }
+            // Marker for the next launch: MainActivity offers to copy the crash
+            // report, since the in-app log buttons may be on the screen that crashed.
+            try {
+                java.io.File(filesDir, CRASH_MARKER).writeText(
+                    "Uncaught on ${thread.name}\n" + android.util.Log.getStackTraceString(throwable)
+                )
             } catch (_: Throwable) {
             }
             // Best-effort: release any live virtual displays synchronously so system_server
