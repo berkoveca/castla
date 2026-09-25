@@ -2738,6 +2738,19 @@ class MirrorForegroundService : Service() {
 
     private fun launchAppFromWebLauncher(pkgName: String, componentName: String? = null, splitMode: Boolean = false, pane: String = if (splitMode) "secondary" else "primary") {
         Log.i(TAG, "launchAppFromWebLauncher: pkg=$pkgName split=$splitMode pane=$pane singleVdSplit=$singleVdSplit")
+        FileLogger.i(TAG, "App launch from car: pkg=$pkgName split=$splitMode pane=$pane")
+        if (!splitMode) {
+            // The car page shows the app only after a keyframe arrives and gives up
+            // (back to the app grid) if none comes in time. The encoder's periodic
+            // IDR only fires once the new app starts drawing, so ask explicitly a
+            // few times while the launch settles.
+            serviceScope.launch {
+                for (delayMs in longArrayOf(300, 1_000, 2_500, 5_000)) {
+                    kotlinx.coroutines.delay(delayMs)
+                    try { videoEncoder?.requestKeyFrame() } catch (_: Throwable) {}
+                }
+            }
+        }
         if (pane == "secondary") {
             if (singleVdSplit) {
                 Log.d(TAG, "Ignoring secondary launch in single-VD split mode (pkg=$pkgName)")

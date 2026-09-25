@@ -1532,6 +1532,16 @@ document.addEventListener('DOMContentLoaded', async () => {
                 sendViewportSize();
                 setStatus('Loading...', '');
                 showOverlay();
+                // Over LTE + tunnel the first keyframe of a freshly launched app can
+                // take several seconds. Nudge the phone for one at 3 s and only give
+                // up (back to the app grid) after 12 s — 5 s bounced users out of
+                // apps that were in fact starting.
+                setTimeout(() => {
+                    if (firstFrameReceived || isLauncherMode) return;
+                    try {
+                        if (videoSocket && videoSocket.readyState === WebSocket.OPEN) videoSocket.send('requestKeyframe');
+                    } catch (_) {}
+                }, 3000);
                 launchTimeout = setTimeout(() => {
                     if (firstFrameReceived) return;
                     closeInputBubble(true);
@@ -1541,7 +1551,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     homeBtn.style.display = 'none';
                     hideOverlay();
                     showLauncherNotice('Launch timed out. Try again.');
-                }, 5000);
+                }, 12000);
             }
         }, 50);
     }
