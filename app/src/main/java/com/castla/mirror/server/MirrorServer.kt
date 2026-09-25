@@ -730,6 +730,9 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         }
     }
 
+    /** Changes on every app start, so an updated APK always yields fresh asset URLs. */
+    private val assetVersion = "${com.castla.mirror.BuildConfig.VERSION_CODE}-${System.currentTimeMillis() / 1000}"
+
     private fun serveAsset(uri: String): Response {
         return try {
             var path = uri.trimStart('/')
@@ -746,7 +749,19 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
                 path.endsWith(".jpg") || path.endsWith(".jpeg") -> "image/jpeg"
                 else -> "application/octet-stream"
             }
-            newChunkedResponse(Response.Status.OK, mimeType, stream)
+            val resp = if (path == "index.html") {
+                val html = stream.bufferedReader().use { it.readText() }
+                newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8",
+                    AssetCachePolicy.versionUrls(html, assetVersion))
+            } else {
+                newChunkedResponse(Response.Status.OK, mimeType, stream)
+            }
+            if (AssetCachePolicy.isNoStore(path)) {
+                resp.addHeader("Cache-Control", AssetCachePolicy.NO_STORE)
+                resp.addHeader("Pragma", "no-cache")
+                resp.addHeader("Expires", "0")
+            }
+            resp
         } catch (e: Exception) {
             newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not Found")
         }
