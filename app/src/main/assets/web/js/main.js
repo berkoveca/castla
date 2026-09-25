@@ -968,6 +968,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         videoSocket.onmessage = async (event) => {
             if (event.data instanceof ArrayBuffer) {
+                stallKeyframeAsked = false;
                 armFrameWatchdog(videoSocket);
                 if (!decoder) return;
                 if (codecMode === 'h264') {
@@ -1041,10 +1042,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         frameWatchdogTimer = null;
     }
 
+    let stallKeyframeAsked = false;
     function onFrameStalled(socket) {
         if (socket !== videoSocket) return;
         if (!socket || socket.readyState !== WebSocket.OPEN) return;
         if (isLauncherMode) return;
+        // First stall: the phone may simply have had nothing new to send (static
+        // screen, encoder restart). Ask for a fresh keyframe on the live socket and
+        // give it one more window before tearing the connection down.
+        if (!stallKeyframeAsked) {
+            stallKeyframeAsked = true;
+            console.warn('[Main] No frames for', FRAME_TIMEOUT_MS, 'ms — requesting keyframe before reconnecting');
+            try { socket.send('requestKeyframe'); } catch (_) {}
+            armFrameWatchdog(socket);
+            return;
+        }
+        stallKeyframeAsked = false;
         console.warn('[Main] Video stream stalled — no frame for', FRAME_TIMEOUT_MS, 'ms. Triggering reconnect.');
         setStatus('Disconnected', 'error');
         showOverlay();

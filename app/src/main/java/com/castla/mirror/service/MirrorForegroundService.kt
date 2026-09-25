@@ -173,6 +173,11 @@ class MirrorForegroundService : Service() {
          * state (thermal, battery temp, memory, tunnel) at most this long before it.
          */
         private const val HEALTH_HEARTBEAT_INTERVAL_MS = 60_000L
+        /**
+         * Auto-resolution encode size (short side), fixed for the session. 720 short
+         * side was confirmed decoding on the car; 800 is a small, safe step up.
+         */
+        private const val AUTO_START_MAX_SHORT_SIDE = 800
 
         // Split resize verification tunables
         private const val MAX_LOCATE_ATTEMPTS = 10
@@ -773,7 +778,7 @@ class MirrorForegroundService : Service() {
         autoResolution = rawMaxHeight == 0
         // Auto starts at the best tier and only steps DOWN on heat/congestion/poor
         // playback: every step is an encoder restart the driver can see.
-        currentMaxHeight = if (autoResolution) AUTO_TIERS.last().maxHeight else rawMaxHeight
+        currentMaxHeight = if (autoResolution) AUTO_START_MAX_SHORT_SIDE else rawMaxHeight
 
         val rawFps = intent.getIntExtra(EXTRA_FPS, 0)
         autoFps = rawFps == 0
@@ -1283,10 +1288,13 @@ class MirrorForegroundService : Service() {
 
     private fun applyAutoTier() {
         val tier = AUTO_TIERS[autoTierIndex]
-        // Only apply auto values for settings that are in auto mode
-        if (autoResolution) currentMaxHeight = tier.maxHeight
-        if (autoFps) currentFps = tier.fps
-        // Trigger pipeline rebuild with new settings
+        // Auto quality changes ONLY the frame rate mid-session. Changing the encode
+        // SIZE mid-stream forces the car's decoder to reconfigure on the fly, and in
+        // the field the picture died a few seconds after the first size step. The
+        // size is decided once per session (best tier, or lower if hot at start).
+        val newFps = if (autoFps) tier.fps else currentFps
+        if (newFps == currentFps) return
+        currentFps = newFps
         if (browserConnected && currentWidth > 0 && currentHeight > 0) {
             serviceScope.launch {
                 rebuildForCurrentViewport()

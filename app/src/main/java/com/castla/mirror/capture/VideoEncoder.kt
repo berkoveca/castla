@@ -21,9 +21,8 @@ class VideoEncoder(
     companion object {
         private const val TAG = "VideoEncoder"
         private const val MIME_TYPE = "video/avc" // H.264
-        // 2s: every IDR is a bitrate spike on the LTE uplink under CBR. New or
-        // reconnecting clients don't wait for it — they request a sync frame.
-        private const val KEYFRAME_INTERVAL = 2 // seconds
+        // 1s: the car's decoder recovers from any hiccup within a second.
+        private const val KEYFRAME_INTERVAL = 1 // seconds
     }
 
     private var codec: MediaCodec? = null
