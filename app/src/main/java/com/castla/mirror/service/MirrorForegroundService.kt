@@ -3681,26 +3681,31 @@ class MirrorForegroundService : Service() {
 
             if (virtualDisplayManager?.isBound() == true) {
                 dismissSplitPresentation(clearState = false)
-                // Always prefer swapping the surface + resizing the live VD. Recreating
-                // it (the old `force` path) relaunched the app on the car screen on every
-                // tier/thermal/reconnect rebuild; recreate is now only the fallback.
-                if (virtualDisplayManager?.hasVirtualDisplay() == true) {
-                    // Resize existing VD gradually to avoid activity recreation
+                // Same size (reconnect, fps step): only swap the encoder surface, so the
+                // app on the car screen is not relaunched. Size change: recreate — an
+                // in-place resize leaves running apps letterboxed at their old size
+                // (small box in a corner of the car screen). See VdRebuildPolicy.
+                val vdAction = com.castla.mirror.policy.VdRebuildPolicy.decide(
+                    virtualDisplayManager?.hasVirtualDisplay() == true,
+                    currentWidth, currentHeight, width, height
+                )
+                FileLogger.i(TAG, "VD rebuild: $vdAction ${currentWidth}x$currentHeight -> ${width}x$height@${dpi}dpi")
+                if (vdAction != com.castla.mirror.policy.VdRebuildPolicy.Action.CREATE) {
                     val vdId = virtualDisplayManager!!.getDisplayId()
-                    val resized = try {
+                    val swapped = vdAction == com.castla.mirror.policy.VdRebuildPolicy.Action.SWAP_SURFACE && try {
                         virtualDisplayManager?.getPrivilegedService()?.setSurface(vdId, surface)
                         virtualDisplayManager?.resizeDisplay(vdId, width, height, dpi) ?: false
                     } catch (e: Exception) {
-                        Log.w(TAG, "Resize failed for VD $vdId (stale display?), will recreate", e)
+                        Log.w(TAG, "Surface swap failed for VD $vdId (stale display?), will recreate", e)
                         false
                     }
-                    if (resized) {
+                    if (swapped) {
                         touchInjector?.setVirtualDisplayInjector { action, x, y, pointerId ->
                             virtualDisplayManager?.injectInput(action, x, y, pointerId)
                         }
-                        Log.i(TAG, "Gradually resized primary VD $vdId to ${width}x${height}")
+                        Log.i(TAG, "Swapped surface on primary VD $vdId at ${width}x${height}")
                     } else {
-                        Log.w(TAG, "VD $vdId resize failed, falling through to recreate")
+                        Log.w(TAG, "VD $vdId: $vdAction — recreating at ${width}x${height}")
                         virtualDisplayManager?.releaseVirtualDisplay()
                         virtualDisplayManager?.createVirtualDisplay(width, height, dpi, surface)
                         if (virtualDisplayManager?.hasVirtualDisplay() == true) {
