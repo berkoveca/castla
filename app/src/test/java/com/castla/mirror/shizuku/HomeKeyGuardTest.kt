@@ -1,6 +1,8 @@
 package com.castla.mirror.shizuku
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -35,6 +37,20 @@ class HomeKeyGuardTest {
         g.onHomeSent(25, nowMs = 10_000)
         assertEquals(0, g.waitBeforeRelease(25, nowMs = 11_000))
         assertEquals(0, g.waitBeforeRelease(24, nowMs = 10_000))
+    }
+
+    @Test
+    fun `HOME only goes to a display that is still alive`() {
+        // AOSP 13 startHomeOnDisplay() has no null check: HOME to a released
+        // display id crashes system_server (phone soft-reboots).
+        assertTrue(HomeKeyGuard.mayPressHome(25, setOf(24, 25)))
+        assertFalse(HomeKeyGuard.mayPressHome(25, setOf(26)))
+        assertFalse(HomeKeyGuard.mayPressHome(-1, setOf(26)))
+    }
+
+    @Test
+    fun `default display is always allowed`() {
+        assertTrue(HomeKeyGuard.mayPressHome(0, emptySet()))
     }
 
     @Test

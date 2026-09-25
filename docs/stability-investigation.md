@@ -200,3 +200,33 @@ log, drawn from both log files.
 Log lines that must survive a hard reboot (W/E level, heartbeats, and breadcrumbs
 before VD and panel calls) are fsync'ed. Everything else can lose its last few
 seconds when the phone reboots.
+
+## Phone soft-reboot: HOME key on a released virtual display (confirmed)
+
+Field report (Galaxy S20 Ultra, Android 13): `system_server_crash` followed by `SYSTEM_RESTART`:
+
+```
+NullPointerException: ... WindowContainer.reduceOnAllTaskDisplayAreas(...) on a null object reference
+  at RootWindowContainer.startHomeOnDisplay(RootWindowContainer.java:1735)
+  at PhoneWindowManager.handleShortPressOnHome(...)
+  at PhoneWindowManager$DisplayHomeButtonHandler...
+```
+
+AOSP 13 source confirms both halves of the bug:
+
+- `PhoneWindowManager` creates a `DisplayHomeButtonHandler` for **any** display id a HOME
+  key carries and runs the home action later on its handler (`post`, or `postDelayed` by the
+  double-tap timeout). It never checks that the display still exists.
+- `RootWindowContainer.startHomeOnDisplay()` calls `getDisplayContent(displayId)` and
+  dereferences it with no null check.
+
+So a HOME keyevent (`input -d N keyevent 3`) crashes system_server if display N is gone
+either before the key is sent (stale id) or before the posted handler runs (release race).
+Castla sends HOME from go-home and from display cleanup on disconnect, while viewport
+rebuilds release/recreate displays on other threads — the field crash was HOME to VD 25
+followed a few ms later by VD 25's release for a resize.
+
+**Status: fixed.** `PrivilegedService` checks and sends every HOME under the same lock as
+display release; HOME to a display that is not live is dropped, and a release of a display
+that just got HOME waits 1 s (`HomeKeyGuard`, unit-tested). Post-mortem now also captures
+`system_server_wtf` and `SYSTEM_RESTART` bodies.

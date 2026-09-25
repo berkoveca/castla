@@ -37,6 +37,15 @@ class HomeKeyGuard(private val settleMs: Long = DEFAULT_SETTLE_MS) {
 
         private val HOME_CMD = Regex("""\binput\s+-d\s+(\d+)\s+keyevent\s+(?:3|HOME|KEYCODE_HOME)\b""")
 
+        /**
+         * HOME must never target a display that no longer exists: AOSP 13
+         * RootWindowContainer.startHomeOnDisplay() dereferences getDisplayContent(id)
+         * without a null check, and PhoneWindowManager creates a per-display HOME
+         * handler for any id. A stale id therefore crashes system_server.
+         */
+        fun mayPressHome(displayId: Int, liveDisplayIds: Set<Int>): Boolean =
+            displayId == 0 || displayId in liveDisplayIds
+
         /** Display targeted by a shell HOME keyevent, or null if [command] is not one. */
         fun homeDisplayOf(command: String): Int? =
             HOME_CMD.find(command)?.groupValues?.get(1)?.toIntOrNull()

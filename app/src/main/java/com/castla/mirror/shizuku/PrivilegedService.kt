@@ -230,6 +230,7 @@ class PrivilegedService : IPrivilegedService.Stub() {
         if (existingDisplayIds.isNotEmpty()) {
             Log.i(TAG, "Releasing ${existingDisplayIds.size} existing VD(s) for name=$name before recreating")
             existingDisplayIds.forEach { displayId ->
+                awaitHomeSettled(displayId)
                 virtualDisplays.remove(displayId)?.let { vd ->
                     try { vd.release() } catch (_: Exception) {}
                 }
@@ -376,8 +377,28 @@ class PrivilegedService : IPrivilegedService.Stub() {
     }
 
     override fun execCommand(command: String): String {
+        val homeDisplay = HomeKeyGuard.homeDisplayOf(command)
+        return if (homeDisplay != null) pressHomeGuarded(homeDisplay, command) else runShell(command)
+    }
+
+    /**
+     * HOME is checked and sent under the same lock as display release, so it can
+     * never reach a display id that is gone (AOSP 13 startHomeOnDisplay NPE →
+     * system_server crash → phone soft-reboot), and a release that follows waits
+     * until the key has been handled (see [HomeKeyGuard]).
+     */
+    @Synchronized
+    private fun pressHomeGuarded(displayId: Int, command: String): String {
+        if (!HomeKeyGuard.mayPressHome(displayId, virtualDisplays.keys.toSet())) {
+            Log.w(TAG, "Dropped HOME to display $displayId: display no longer exists (would crash system_server)")
+            return ""
+        }
         // Recorded before exec: the key may be dispatched before `input` exits.
-        HomeKeyGuard.homeDisplayOf(command)?.let { homeKeyGuard.onHomeSent(it, SystemClock.uptimeMillis()) }
+        homeKeyGuard.onHomeSent(displayId, SystemClock.uptimeMillis())
+        return runShell(command)
+    }
+
+    private fun runShell(command: String): String {
         return try {
             val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", command))
             val output = process.inputStream.bufferedReader().readText()
