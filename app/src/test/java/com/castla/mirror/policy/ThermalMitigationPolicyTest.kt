@@ -84,9 +84,9 @@ class ThermalMitigationPolicyTest {
     }
 
     @Test
-    fun `low headroom escalates before the status callback fires`() {
-        // status NONE but headroom 0.8 (< 0.85) => should behave like SEVERE
-        val a = ThermalMitigationPolicy.evaluate(NONE, 0.8f)
+    fun `headroom at or above 1_0 escalates before the status callback fires`() {
+        // getThermalHeadroom: 1.0 == SEVERE forecast, higher is worse
+        val a = ThermalMitigationPolicy.evaluate(NONE, 1.05f)
         assertTrue(a.stopAudio)
         assertTrue(a.stopSecondary)
         assertFalse(a.emergencyStop)
@@ -95,26 +95,25 @@ class ThermalMitigationPolicyTest {
     }
 
     @Test
-    fun `headroom below zero triggers an emergency stop`() {
-        val a = ThermalMitigationPolicy.evaluate(NONE, 0.0f)
-        assertTrue(a.emergencyStop)
-        assertTrue(a.stopAudio)
-        assertTrue(a.stopSecondary)
+    fun `normal headroom on a cool device does not throttle`() {
+        // S20 Ultra reports ~0.61 at 28C idle; this used to be read as "severe"
+        assertEquals(ThermalMitigationPolicy.Action.NONE, ThermalMitigationPolicy.evaluate(NONE, 0.61f))
+        assertEquals(ThermalMitigationPolicy.Action.NONE, ThermalMitigationPolicy.evaluate(NONE, 0.0f))
+    }
+
+    @Test
+    fun `headroom never triggers an emergency stop on its own`() {
+        assertFalse(ThermalMitigationPolicy.evaluate(NONE, 0.0f).emergencyStop)
+        assertFalse(ThermalMitigationPolicy.evaluate(NONE, 3.0f).emergencyStop)
     }
 
     @Test
     fun `headroom in moderate band caps secondary only`() {
-        val a = ThermalMitigationPolicy.evaluate(NONE, 0.9f)
+        val a = ThermalMitigationPolicy.evaluate(NONE, 0.92f)
         assertEquals(0.6, a.bitrateFactor!!, 0.0001)
         assertFalse(a.stopAudio)
         assertTrue(a.stopSecondary)
         assertFalse(a.emergencyStop)
-    }
-
-    @Test
-    fun `high headroom does not escalate when status is NONE`() {
-        val a = ThermalMitigationPolicy.evaluate(NONE, 1.2f)
-        assertEquals(ThermalMitigationPolicy.Action.NONE, a)
     }
 
     @Test
@@ -126,12 +125,13 @@ class ThermalMitigationPolicyTest {
 
     @Test
     fun `merge keeps the most conservative choice across status and headroom`() {
-        // MODERATE status but headroom 0.0 => emergencyStop must win
-        val a = ThermalMitigationPolicy.evaluate(MODERATE, 0.0f)
-        assertTrue(a.emergencyStop)
-        assertEquals(0.1, a.bitrateFactor!!, 0.0001)
+        // MODERATE status but headroom beyond severe => severe limits must win
+        val a = ThermalMitigationPolicy.evaluate(MODERATE, 1.2f)
+        assertEquals(0.4, a.bitrateFactor!!, 0.0001)
+        assertEquals(15, a.fpsOverride)
         assertTrue(a.stopAudio)
         assertTrue(a.stopSecondary)
+        assertFalse(a.emergencyStop)
     }
 
     @Test

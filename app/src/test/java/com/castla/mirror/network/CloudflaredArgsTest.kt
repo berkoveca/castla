@@ -22,9 +22,9 @@ class CloudflaredArgsTest {
     }
 
     @Test
-    fun `uses http2 transport instead of QUIC`() {
-        // QUIC over UDP dies on mobile-carrier NAT timeouts; TCP-based http2 survives them.
-        assertEquals("http2", valueOf("--protocol"))
+    fun `uses QUIC because http2 cannot carry WebSockets`() {
+        // cloudflare/cloudflared#1208: WebSockets break with --protocol http2
+        assertEquals("quic", valueOf("--protocol"))
     }
 
     @Test
@@ -58,7 +58,7 @@ class CloudflaredArgsTest {
         val shown = CloudflaredArgs.redacted(args)
         assertFalse(shown, shown.contains("TOKEN123"))
         assertFalse(shown, shown.contains("libcloudflared"))
-        assertTrue(shown, shown.contains("--protocol http2"))
+        assertTrue(shown, shown.contains("--protocol quic"))
         assertTrue(shown, shown.endsWith("--token <redacted>"))
     }
 }

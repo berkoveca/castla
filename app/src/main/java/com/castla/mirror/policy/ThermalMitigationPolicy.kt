@@ -34,7 +34,10 @@ object ThermalMitigationPolicy {
     private const val FACTOR_SEVERE = 0.4
     private const val FACTOR_CRITICAL = 0.25
     private const val FACTOR_EMERGENCY = 0.15
-    private const val FACTOR_SHUTDOWN = 0.1
+    /** Forecast headroom at/above which we act like SEVERE (1.0 == severe throttling). */
+    const val HEADROOM_SEVERE = 1.0f
+    /** Forecast headroom at/above which we pre-emptively back off like MODERATE. */
+    const val HEADROOM_MODERATE = 0.9f
 
     data class Action(
         /** Bitrate multiplier applied to the pre-thermal baseline. Null = leave unchanged. */
@@ -73,13 +76,15 @@ object ThermalMitigationPolicy {
             else -> Action.NONE
         }
 
+        // getThermalHeadroom(): 0.0 = no throttling, 1.0 = THERMAL_STATUS_SEVERE,
+        // >1.0 = beyond it. HIGHER IS WORSE. (This used to be read the other way
+        // round: a cool S20 Ultra reporting 0.61 was treated as "severe" — 500 kbps,
+        // 15 fps and a pipeline rebuild on every session — and 0.0 as "shutdown".)
         val headroomAction = headroom?.takeIf { !it.isNaN() }?.let { h ->
             when {
-                h <= 0.0f ->
-                    Action(FACTOR_SHUTDOWN, 5, 10, 480, stopAudio = true, stopSecondary = true, emergencyStop = true, "headroom_shutdown")
-                h < 0.85f ->
+                h >= HEADROOM_SEVERE ->
                     Action(FACTOR_SEVERE, 8, 15, 720, stopAudio = true, stopSecondary = true, emergencyStop = false, "headroom_severe")
-                h < 0.95f ->
+                h >= HEADROOM_MODERATE ->
                     Action(FACTOR_MODERATE, 12, 20, null, stopAudio = false, stopSecondary = true, emergencyStop = false, "headroom_moderate")
                 else -> null
             }

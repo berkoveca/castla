@@ -3,16 +3,17 @@ package com.castla.mirror.network
 /**
  * Command line for the bundled cloudflared connector.
  *
- * - `--protocol http2`: the default (QUIC over UDP) drops whenever a mobile
- *   carrier or hotspot NAT expires the idle UDP mapping; the phone uploads the
- *   whole video stream over its cellular uplink, so TCP-based http2 is the
- *   robust choice here.
+ * - `--protocol quic`: NOT http2. With http2, cloudflared cannot carry
+ *   WebSockets (cloudflare/cloudflared#1208): every browser socket is dropped
+ *   right after the upgrade, which is exactly the instant disconnect/reconnect
+ *   loop seen in the field. Pinned (rather than "auto") so it never silently
+ *   falls back to http2.
  * - `--ha-connections 2`: two edge connections instead of one, so a single
  *   connection reset does not take the car's page down while it reconnects.
  */
 object CloudflaredArgs {
 
-    const val PROTOCOL = "http2"
+    const val PROTOCOL = "quic"
     const val HA_CONNECTIONS = 2
 
     fun namedTunnel(binaryPath: String, token: String): List<String> = listOf(

@@ -132,6 +132,20 @@ class MirrorForegroundService : Service() {
         var instance: MirrorForegroundService? = null
             private set
 
+        /**
+         * The tunnel is an app-wide singleton that outlives service instances, so its
+         * orphan-stop timer must be too. When it lived on the per-instance handler, a
+         * NEW session that reused the tunnel could only cancel its own (non-existent)
+         * timer — the OLD instance's timer then killed the tunnel mid-session.
+         */
+        private val orphanHandler = Handler(Looper.getMainLooper())
+        @Volatile private var pendingOrphanStop: Runnable? = null
+
+        private fun cancelTunnelOrphanStop() {
+            pendingOrphanStop?.let { orphanHandler.removeCallbacks(it) }
+            pendingOrphanStop = null
+        }
+
         /** Resolution/FPS tiers for auto mode, ordered from most conservative to highest. */
         data class AutoTier(val maxHeight: Int, val fps: Int, val label: String)
         val AUTO_TIERS = listOf(
@@ -198,9 +212,9 @@ class MirrorForegroundService : Service() {
     /** Orphan watchdog: stops the retained tunnel if no session adopts it in time. */
     private val tunnelOrphanStopRunnable = Runnable {
         Log.i(TAG, "No session adopted the tunnel within orphan window — stopping it cleanly")
+        pendingOrphanStop = null
         stopCloudflareTunnel("orphan_timeout")
-    }
-    private var healthHeartbeatJob: Job? = null
+    }    private var healthHeartbeatJob: Job? = null
     /** Last thermal mitigation label written to the file log (avoids a line every 5s headroom poll). */
     @Volatile private var lastLoggedThermalAction: String? = null
     private var shizukuSetup: ShizukuSetup? = null
@@ -1007,7 +1021,7 @@ class MirrorForegroundService : Service() {
             cloudflareTunnel = tunnel
 
             // A new session just adopted the retained tunnel — cancel the orphan stop.
-            mainHandler.removeCallbacks(tunnelOrphanStopRunnable)
+            cancelTunnelOrphanStop()
 
             // Collect tunnel URL changes and forward to the static flow
             serviceScope.launch {
@@ -1056,7 +1070,7 @@ class MirrorForegroundService : Service() {
     private fun stopCloudflareTunnel(reason: String) {
         tunnelIdleJob?.cancel()
         tunnelIdleJob = null
-        mainHandler.removeCallbacks(tunnelOrphanStopRunnable)
+        cancelTunnelOrphanStop()
         try {
             cloudflareTunnel?.stop(reason)
         } catch (e: Exception) {
@@ -1079,8 +1093,9 @@ class MirrorForegroundService : Service() {
         _tunnelUrlFlow.value = null
         _tunnelActiveFlow.value = false
         _tunnelErrorFlow.value = null
-        mainHandler.removeCallbacks(tunnelOrphanStopRunnable)
-        mainHandler.postDelayed(tunnelOrphanStopRunnable, TUNNEL_ORPHAN_TIMEOUT_MS)
+        cancelTunnelOrphanStop()
+        pendingOrphanStop = tunnelOrphanStopRunnable
+        orphanHandler.postDelayed(tunnelOrphanStopRunnable, TUNNEL_ORPHAN_TIMEOUT_MS)
         Log.i(TAG, "Tunnel retained for restart (orphan stop in ${TUNNEL_ORPHAN_TIMEOUT_MS}ms)")
         // No foreground service will be running during this window: the app may be
         // cached/frozen, and cloudflared (our child process) is frozen or killed with it.
@@ -3036,7 +3051,7 @@ class MirrorForegroundService : Service() {
             // the idle-stop watchdog (and any orphan stop from a previous session).
             tunnelIdleJob?.cancel()
             tunnelIdleJob = null
-            mainHandler.removeCallbacks(tunnelOrphanStopRunnable)
+            cancelTunnelOrphanStop()
 
             acquireWakeLocks()
 
