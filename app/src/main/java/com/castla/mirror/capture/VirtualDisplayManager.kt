@@ -20,6 +20,9 @@ import com.castla.mirror.shizuku.IPrivilegedService
  * when duplicate `onServiceConnected` callbacks were misclassified as binder
  * deaths.
  */
+// Create/resize/release are @Synchronized: the first-connection setup and a
+// viewport-driven rebuild used to create two displays at the same moment, and
+// whichever finished last decided which display id this class tracked.
 class VirtualDisplayManager {
 
     companion object {
@@ -54,6 +57,7 @@ class VirtualDisplayManager {
      * because the underlying privileged service tracks the [VirtualDisplay] in
      * its own process; locally we only retain the assigned [displayId].
      */
+    @Synchronized
     fun createVirtualDisplay(
         width: Int,
         height: Int,
@@ -199,6 +203,7 @@ class VirtualDisplayManager {
     fun hasVirtualDisplay(): Boolean = displayId >= 0 && privilegedService != null
 
     /** Resize a virtual display by ID without destroying it. */
+    @Synchronized
     fun resizeDisplay(displayId: Int, width: Int, height: Int, dpi: Int): Boolean {
         if (displayId < 0) return false
         return try {
@@ -283,6 +288,7 @@ class VirtualDisplayManager {
      * Release just the virtual display, keeping the privileged service mirror.
      * Use this when rebuilding the pipeline with new dimensions.
      */
+    @Synchronized
     fun releaseVirtualDisplay() {
         val releasedId = displayId
         if (releasedId >= 0) {
@@ -312,6 +318,7 @@ class VirtualDisplayManager {
      * owned by `ShizukuSetup` for the foreground service lifetime. Releases the
      * privileged-service-side VD first when one is held.
      */
+    @Synchronized
     fun release() {
         val releasedId = displayId
         if (releasedId >= 0) {

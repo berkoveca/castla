@@ -216,6 +216,10 @@ class MirrorForegroundService : Service() {
         stopCloudflareTunnel("orphan_timeout")
     }
     private var healthHeartbeatJob: Job? = null
+    /** Serializes browser connect vs. (grace-expired) disconnect teardown. */
+    private val connectionLock = Any()
+    /** Bumped on every browser (re)connect; a pending teardown from an older generation is void. */
+    @Volatile private var connectionGeneration = 0
     /** Last thermal mitigation label written to the file log (avoids a line every 5s headroom poll). */
     @Volatile private var lastLoggedThermalAction: String? = null
     private var shizukuSetup: ShizukuSetup? = null
@@ -767,7 +771,9 @@ class MirrorForegroundService : Service() {
 
         val rawMaxHeight = intent!!.getIntExtra(EXTRA_MAX_RESOLUTION, 0)
         autoResolution = rawMaxHeight == 0
-        currentMaxHeight = if (autoResolution) 720 else rawMaxHeight
+        // Auto starts at the best tier and only steps DOWN on heat/congestion/poor
+        // playback: every step is an encoder restart the driver can see.
+        currentMaxHeight = if (autoResolution) AUTO_TIERS.last().maxHeight else rawMaxHeight
 
         val rawFps = intent.getIntExtra(EXTRA_FPS, 0)
         autoFps = rawFps == 0
@@ -855,9 +861,18 @@ class MirrorForegroundService : Service() {
         val stillConnected = mirrorServer?.isBrowserConnected() == true
         if (!stillConnected && browserConnected && !isCleanupInProgress) {
             Log.i(TAG, "Screen ON — browser gone while screen was off, executing deferred teardown")
+            val generation = connectionGeneration
             serviceScope.launch {
-                onBrowserDisconnected()
-                browserConnectionListener?.invoke(false)
+                val tornDown = synchronized(connectionLock) {
+                    if (connectionGeneration != generation || mirrorServer?.isBrowserConnected() == true ||
+                        !browserConnected
+                    ) false else {
+                        browserConnected = false
+                        onBrowserDisconnected()
+                        true
+                    }
+                }
+                if (tornDown) browserConnectionListener?.invoke(false)
             }
         }
     }
@@ -1200,7 +1215,7 @@ class MirrorForegroundService : Service() {
     private fun startAutoScaleLoop() {
         if (!autoResolution && !autoFps) return
         autoScaleJob?.cancel()
-        autoTierIndex = 0  // start at most conservative tier
+        autoTierIndex = AUTO_TIERS.lastIndex  // start at the best tier; step down on trouble
         autoStableCount = 0
         autoScaleJob = serviceScope.launch {
             // Short initial stabilization, then evaluate immediately
@@ -1459,18 +1474,19 @@ class MirrorForegroundService : Service() {
 
 
                 server.setBrowserConnectionListener { connected ->
-                    if (connected) {
-                        cancelPendingBrowserDisconnect("browser_reconnected")
-                        if (!browserConnected) {
-                            browserConnected = true
-                            onBrowserConnected()
+                    synchronized(connectionLock) {
+                        if (connected) {
+                            connectionGeneration++
+                            cancelPendingBrowserDisconnect("browser_reconnected")
+                            if (!browserConnected) {
+                                browserConnected = true
+                                onBrowserConnected()
+                            }
+                        } else if (browserConnected) {
+                            scheduleBrowserDisconnect()
                         }
-                        browserConnectionListener?.invoke(true)
-                    } else if (browserConnected) {
-                        scheduleBrowserDisconnect()
-                    } else {
-                        browserConnectionListener?.invoke(false)
                     }
+                    browserConnectionListener?.invoke(connected)
                 }
 
                 server.start(0)
@@ -3023,6 +3039,7 @@ class MirrorForegroundService : Service() {
         }
         val screenOff = screenOffPolicy.isScreenOff
         val graceMs = DisconnectPolicy.graceMs(screenOff)
+        val generationAtDisconnect = connectionGeneration
         pendingBrowserDisconnectJob = serviceScope.launch {
             Log.i(TAG, "Scheduling browser disconnect grace window: ${graceMs}ms (screenOff=$screenOff)")
             FileLogger.i(TAG, "Browser gone — grace window ${graceMs}ms before VD/encoder teardown (screenOff=$screenOff)")
@@ -3038,11 +3055,27 @@ class MirrorForegroundService : Service() {
                 Log.i(TAG, "Screen is off — deferring teardown until screen turns on")
                 return@launch
             }
-            if (browserConnected) {
-                browserConnected = false
-                onBrowserDisconnected()
+            // Decide and tear down under the same lock the connect path takes, and
+            // bail out if ANY connection happened since this grace window started. The
+            // grace timer used to fire at the exact moment the car reconnected: the
+            // reconnect rebuilt the virtual display and this late teardown then
+            // destroyed it, leaving a connected page with no picture (vd=-1).
+            val tornDown = synchronized(connectionLock) {
+                if (connectionGeneration != generationAtDisconnect ||
+                    mirrorServer?.isBrowserConnected() == true || !browserConnected
+                ) {
+                    false
+                } else {
+                    browserConnected = false
+                    onBrowserDisconnected()
+                    true
+                }
             }
-            browserConnectionListener?.invoke(false)
+            if (tornDown) {
+                browserConnectionListener?.invoke(false)
+            } else {
+                FileLogger.i(TAG, "Grace expired but the browser reconnected meanwhile — teardown skipped")
+            }
         }
     }
 
@@ -3627,7 +3660,10 @@ class MirrorForegroundService : Service() {
 
             if (virtualDisplayManager?.isBound() == true) {
                 dismissSplitPresentation(clearState = false)
-                if (virtualDisplayManager?.hasVirtualDisplay() == true && !force) {
+                // Always prefer swapping the surface + resizing the live VD. Recreating
+                // it (the old `force` path) relaunched the app on the car screen on every
+                // tier/thermal/reconnect rebuild; recreate is now only the fallback.
+                if (virtualDisplayManager?.hasVirtualDisplay() == true) {
                     // Resize existing VD gradually to avoid activity recreation
                     val vdId = virtualDisplayManager!!.getDisplayId()
                     val resized = try {
