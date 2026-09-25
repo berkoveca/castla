@@ -35,6 +35,7 @@ import android.widget.Toast
 import androidx.core.content.FileProvider
 import com.castla.mirror.BuildConfig
 import com.castla.mirror.R
+import com.castla.mirror.diagnostics.DiagnosticsCollector
 import com.castla.mirror.diagnostics.FileLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -692,7 +693,18 @@ private fun authFieldColors() = OutlinedTextFieldDefaults.colors(
 )
 
 private suspend fun shareLogs(context: Context) {
-    val files = withContext(Dispatchers.IO) { FileLogger.getLogFiles() }
+    val files = withContext(Dispatchers.IO) {
+        val logs = FileLogger.getLogFiles()
+        if (logs.isEmpty()) return@withContext logs
+        // Attach the diagnostic header (device, reboot check, tunnel state, …) as its
+        // own file next to the raw logs; the logs themselves are shared in full.
+        val report = try {
+            java.io.File(context.filesDir, "logs/diagnostic-report.txt").apply {
+                writeText(DiagnosticsCollector.buildReport(context, includeLog = false))
+            }
+        } catch (_: Throwable) { null }
+        listOfNotNull(report) + logs
+    }
     if (files.isEmpty()) {
         withContext(Dispatchers.Main) {
             Toast.makeText(context, R.string.settings_logs_empty, Toast.LENGTH_SHORT).show()
@@ -731,14 +743,10 @@ private suspend fun shareLogs(context: Context) {
 
 private suspend fun copyRecentLogs(context: Context) {
     val tail = withContext(Dispatchers.IO) {
-        val files = FileLogger.getLogFiles()
-        if (files.isEmpty()) return@withContext null
-        val current = files.first()
-        val maxBytes = 8 * 1024
-        val all = current.readBytes()
-        val start = (all.size - maxBytes).coerceAtLeast(0)
-        // Decode with replacement so partial UTF-8 codepoints don't crash
-        String(all, start, all.size - start, Charsets.UTF_8)
+        if (FileLogger.getLogFiles().isEmpty()) return@withContext null
+        // Header (device, reboot check, previous exits, post-mortem, tunnel) + the
+        // newest log lines across both log files, capped for clipboard safety.
+        DiagnosticsCollector.buildReport(context)
     }
     withContext(Dispatchers.Main) {
         if (tail.isNullOrEmpty()) {

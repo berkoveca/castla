@@ -55,7 +55,10 @@ import com.castla.mirror.policy.ScreenOffAction
 import com.castla.mirror.policy.ScreenOffPolicy
 import com.castla.mirror.policy.ScreenOffState
 import com.castla.mirror.diagnostics.DiagnosticEvent
+import com.castla.mirror.diagnostics.CrashBreadcrumbs
+import com.castla.mirror.diagnostics.DiagnosticNames
 import com.castla.mirror.diagnostics.FileLogger
+import com.castla.mirror.diagnostics.HealthMonitor
 import com.castla.mirror.diagnostics.MirrorDiagnostics
 import com.castla.mirror.diagnostics.TerminalReason
 import com.castla.mirror.utils.SplitMath
@@ -152,6 +155,12 @@ class MirrorForegroundService : Service() {
         // Grace period constants are now in DisconnectPolicy
         /** Interval for poking the VD awake while the physical screen is off. */
         private const val VD_KEEP_ALIVE_INTERVAL_MS = 30_000L
+        /**
+         * Health heartbeat period. Each beat is fsync'ed to the log AND stored as a
+         * breadcrumb, so after a phone reboot the next app start can show the device
+         * state (thermal, battery temp, memory, tunnel) at most this long before it.
+         */
+        private const val HEALTH_HEARTBEAT_INTERVAL_MS = 60_000L
 
         // Split resize verification tunables
         private const val MAX_LOCATE_ATTEMPTS = 10
@@ -191,8 +200,11 @@ class MirrorForegroundService : Service() {
     /** Orphan watchdog: stops the retained tunnel if no session adopts it in time. */
     private val tunnelOrphanStopRunnable = Runnable {
         Log.i(TAG, "No session adopted the tunnel within orphan window — stopping it cleanly")
-        stopCloudflareTunnel()
+        stopCloudflareTunnel("orphan_timeout")
     }
+    private var healthHeartbeatJob: Job? = null
+    /** Last thermal mitigation label written to the file log (avoids a line every 5s headroom poll). */
+    @Volatile private var lastLoggedThermalAction: String? = null
     private var shizukuSetup: ShizukuSetup? = null
     private var currentWidth: Int = 0
     private var currentHeight: Int = 0
@@ -424,7 +436,12 @@ class MirrorForegroundService : Service() {
     
     @androidx.annotation.RequiresApi(Build.VERSION_CODES.Q)
     private fun handleThermalStatusChange(status: Int) {
+        val previous = _thermalStatus.value
         _thermalStatus.value = status
+        if (status != previous) {
+            FileLogger.w(TAG, "Thermal status ${DiagnosticNames.thermal(previous)} → ${DiagnosticNames.thermal(status)} | " +
+                HealthMonitor.snapshot(this))
+        }
 
         // Save original bitrate on first thermal event for later restoration
         if (preThermalTargetBitrate == 0 && targetBitrate > 0) {
@@ -499,6 +516,7 @@ class MirrorForegroundService : Service() {
 
         if (action.emergencyStop) {
             Log.w(TAG, "Thermal ${action.label} — EMERGENCY: stopping session to protect device from thermal shutdown/reboot")
+            FileLogger.e(TAG, "Thermal ${action.label} — EMERGENCY stop to avoid thermal shutdown | ${HealthMonitor.snapshot(this)}")
             android.os.Handler(mainLooper).post {
                 try {
                     android.widget.Toast.makeText(
@@ -532,9 +550,14 @@ class MirrorForegroundService : Service() {
             serviceScope.launch { rebuildPipeline(currentWidth, currentHeight, force = true) }
         }
 
-        Log.w(TAG, "Thermal mitigation applied: ${action.label} bitrate=${currentBitrate / 1000}kbps " +
+        val mitigationMsg = "Thermal mitigation applied: ${action.label} bitrate=${currentBitrate / 1000}kbps " +
             "fpsOverride=${action.fpsOverride} maxHeight=${action.maxHeight} " +
-            "stopAudio=${action.stopAudio} stopSecondary=${action.stopSecondary}")
+            "stopAudio=${action.stopAudio} stopSecondary=${action.stopSecondary}"
+        Log.w(TAG, mitigationMsg)
+        if (action.label != lastLoggedThermalAction) {
+            lastLoggedThermalAction = action.label
+            FileLogger.w(TAG, mitigationMsg)
+        }
     }
 
     private fun broadcastThermalStatus(status: Int) {
@@ -570,6 +593,7 @@ class MirrorForegroundService : Service() {
                 acquire() // WiFi lock doesn't support timeout
             }
             Log.i(TAG, "WakeLocks acquired (CPU & WiFi will stay awake)")
+            FileLogger.i(TAG, "WakeLocks acquired (partial CPU 4h timeout + WiFi high-perf)")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to acquire wake locks", e)
         }
@@ -582,6 +606,7 @@ class MirrorForegroundService : Service() {
             wakeLock = null
             wifiLock = null
             Log.i(TAG, "WakeLocks released")
+            FileLogger.i(TAG, "WakeLocks released")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to release wake locks", e)
         }
@@ -757,6 +782,7 @@ class MirrorForegroundService : Service() {
         }
         stopRequested = true
         Log.i(TAG, "Async stop requested: $reason")
+        FileLogger.i(TAG, "Async stop requested: $reason")
 
         try {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -778,10 +804,12 @@ class MirrorForegroundService : Service() {
         val deviceLocked = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1)
             keyguardManager.isDeviceLocked else keyguardLocked
         val vdId = virtualDisplayManager?.getDisplayId() ?: -1
-        Log.i(TAG, "[BUILD:screen-off-v3] $event — " +
+        val msg = "[BUILD:screen-off-v3] $event — " +
                 "state=${screenOffPolicy.state}, keyguardLocked=$keyguardLocked, deviceLocked=$deviceLocked, " +
                 "browserConnected=$browserConnected, serverConnected=${mirrorServer?.isBrowserConnected()}, " +
-                "wakeLockHeld=${wakeLock?.isHeld == true}, vdId=$vdId, panelOffSupported=${screenOffPolicy.isPanelOffSupported}")
+                "wakeLockHeld=${wakeLock?.isHeld == true}, vdId=$vdId, panelOffSupported=${screenOffPolicy.isPanelOffSupported}"
+        Log.i(TAG, msg)
+        FileLogger.i(TAG, msg, durable = true)
     }
 
     private fun onPhoneScreenOff() {
@@ -824,6 +852,7 @@ class MirrorForegroundService : Service() {
                 }
                 val success = vdm.setPhysicalDisplayPower(false)
                 Log.i(TAG, "Physical panel OFF result: success=$success")
+                FileLogger.i(TAG, "Physical panel OFF result: success=$success", durable = true)
                 val fallback = screenOffPolicy.onPanelOffResult(success)
                 if (fallback != ScreenOffAction.NONE) {
                     executeScreenOffAction(fallback)
@@ -843,6 +872,7 @@ class MirrorForegroundService : Service() {
                 stopVdKeepAlive()
                 val restored = virtualDisplayManager?.setPhysicalDisplayPower(true) ?: false
                 Log.i(TAG, "Physical panel restored: success=$restored")
+                FileLogger.i(TAG, "Physical panel restored: success=$restored", durable = true)
             }
             ScreenOffAction.STOP_KEEP_ALIVE -> {
                 stopVdKeepAlive()
@@ -882,8 +912,11 @@ class MirrorForegroundService : Service() {
         cleanupCompleted = true // set immediately under lock to prevent reentrant race
         val effectiveReason = terminalReason.get()?.let { "terminal:${it.name}" } ?: reason
         Log.i(TAG, "Performing cleanup: $effectiveReason")
-        FileLogger.i(TAG, "Performing cleanup: $effectiveReason")
+        FileLogger.i(TAG, "Performing cleanup: $effectiveReason | ${HealthMonitor.snapshot(this, cloudflareTunnel)}", durable = true)
         MirrorDiagnostics.endSession(effectiveReason)
+        try { healthHeartbeatJob?.cancel() } catch (_: Exception) {}
+        healthHeartbeatJob = null
+        CrashBreadcrumbs.markSession(this, active = false, reason = "ended:$effectiveReason")
         isCleanupInProgress = true
 
         // Always restore physical display panel on cleanup — safety net
@@ -956,6 +989,7 @@ class MirrorForegroundService : Service() {
         isCleanupInProgress = false
         isServiceRunning = false
         Log.i(TAG, "Cleanup completed: $reason")
+        FileLogger.i(TAG, "Cleanup completed: $reason")
     }
 
     private fun startCloudflareTunnel() {
@@ -983,7 +1017,7 @@ class MirrorForegroundService : Service() {
                             kotlinx.coroutines.delay(TunnelRestartPolicy.IDLE_AFTER_URL_MS)
                             if (!browserConnected && !isCleanupInProgress) {
                                 Log.i(TAG, "No browser connected within ${TunnelRestartPolicy.IDLE_AFTER_URL_MS}ms of URL — stopping tunnel")
-                                stopCloudflareTunnel()
+                                stopCloudflareTunnel("idle_no_browser_${TunnelRestartPolicy.IDLE_AFTER_URL_MS / 1000}s")
                             }
                         }
                     }
@@ -1012,12 +1046,12 @@ class MirrorForegroundService : Service() {
         }
     }
 
-    private fun stopCloudflareTunnel() {
+    private fun stopCloudflareTunnel(reason: String) {
         tunnelIdleJob?.cancel()
         tunnelIdleJob = null
         mainHandler.removeCallbacks(tunnelOrphanStopRunnable)
         try {
-            cloudflareTunnel?.stop()
+            cloudflareTunnel?.stop(reason)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to stop Cloudflare tunnel", e)
         }
@@ -1041,6 +1075,9 @@ class MirrorForegroundService : Service() {
         mainHandler.removeCallbacks(tunnelOrphanStopRunnable)
         mainHandler.postDelayed(tunnelOrphanStopRunnable, TUNNEL_ORPHAN_TIMEOUT_MS)
         Log.i(TAG, "Tunnel retained for restart (orphan stop in ${TUNNEL_ORPHAN_TIMEOUT_MS}ms)")
+        // No foreground service will be running during this window: the app may be
+        // cached/frozen, and cloudflared (our child process) is frozen or killed with it.
+        FileLogger.i(TAG, "Tunnel retained without a foreground service (orphan stop in ${TUNNEL_ORPHAN_TIMEOUT_MS}ms)")
     }
 
     private fun startAbrLoop() {
@@ -1083,6 +1120,31 @@ class MirrorForegroundService : Service() {
                 } catch (_: Throwable) {
                     // Headroom polling is best-effort; never let it break streaming.
                 }
+            }
+        }
+    }
+
+    /**
+     * Writes a durable one-line health snapshot every [HEALTH_HEARTBEAT_INTERVAL_MS]
+     * for the whole session (browser connected or not), and mirrors it into the
+     * reboot breadcrumb. Gaps between heartbeats in the log mean the process was
+     * frozen, killed, or the phone went down.
+     */
+    private fun startHealthHeartbeat() {
+        healthHeartbeatJob?.cancel()
+        healthHeartbeatJob = serviceScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                try {
+                    val line = "browser=${if (browserConnected) "connected" else "none"} " +
+                        "screen=${screenOffPolicy.state} vd=${virtualDisplayManager?.getDisplayId() ?: -1} " +
+                        "bitrate=${currentBitrate / 1000}kbps ${currentWidth}x$currentHeight " +
+                        HealthMonitor.snapshot(this@MirrorForegroundService, cloudflareTunnel)
+                    FileLogger.i("Health", line, durable = true)
+                    CrashBreadcrumbs.recordHeartbeat(this@MirrorForegroundService, line)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "health heartbeat failed", t)
+                }
+                kotlinx.coroutines.delay(HEALTH_HEARTBEAT_INTERVAL_MS)
             }
         }
     }
@@ -1203,6 +1265,8 @@ class MirrorForegroundService : Service() {
         try {
             terminalReason.set(null)
             MirrorDiagnostics.onSessionStart()
+            CrashBreadcrumbs.markSession(this, active = true, reason = "started")
+            startHealthHeartbeat()
 
             // Only initialize projection and server — defer encoder/capture until browser connects
             screenCapture = ScreenCaptureManager(this).also {
@@ -2938,11 +3002,13 @@ class MirrorForegroundService : Service() {
         val graceMs = DisconnectPolicy.graceMs(screenOff)
         pendingBrowserDisconnectJob = serviceScope.launch {
             Log.i(TAG, "Scheduling browser disconnect grace window: ${graceMs}ms (screenOff=$screenOff)")
+            FileLogger.i(TAG, "Browser gone — grace window ${graceMs}ms before VD/encoder teardown (screenOff=$screenOff)")
             kotlinx.coroutines.delay(graceMs)
             pendingBrowserDisconnectJob = null
             val stillConnected = mirrorServer?.isBrowserConnected() == true
             if (stillConnected) {
                 Log.i(TAG, "Browser reconnected during grace window; keeping pipeline alive")
+                FileLogger.i(TAG, "Browser reconnected within grace window; pipeline kept")
                 return@launch
             }
             if (!DisconnectPolicy.shouldTeardown(screenOffPolicy.isScreenOff, isBrowserConnected = false)) {
@@ -3051,6 +3117,7 @@ class MirrorForegroundService : Service() {
      */
     private fun tearDownVdSession(reason: String) {
         Log.i(TAG, "Tearing down VD session: $reason")
+        FileLogger.i(TAG, "Tearing down VD session: $reason")
         try { touchInjector?.setVirtualDisplayInjector(null) } catch (_: Exception) {}
         try { virtualDisplayManager?.release() } catch (e: Exception) { Log.w(TAG, "Failed to release virtual display manager", e) }
         virtualDisplayManager = null

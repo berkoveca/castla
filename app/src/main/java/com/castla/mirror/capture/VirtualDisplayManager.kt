@@ -4,6 +4,7 @@ import android.hardware.display.VirtualDisplay
 import android.util.Log
 import android.view.Surface
 import com.castla.mirror.diagnostics.DiagnosticEvent
+import com.castla.mirror.diagnostics.FileLogger
 import com.castla.mirror.diagnostics.MirrorDiagnostics
 import com.castla.mirror.shizuku.IPrivilegedService
 
@@ -71,6 +72,9 @@ class VirtualDisplayManager {
         }
 
         return try {
+            // Durable breadcrumb BEFORE the call: if system_server/SurfaceFlinger takes
+            // the phone down inside it, this is the last line that reaches flash.
+            FileLogger.i(TAG, "→ createVirtualDisplay primary ${width}x${height}@${dpi}dpi", durable = true)
             val id = service.createVirtualDisplay(width, height, dpi, "Castla")
             if (id >= 0) {
                 // Attach the encoder's Surface so VD content renders into the encoder
@@ -88,10 +92,12 @@ class VirtualDisplayManager {
                 null
             } else {
                 Log.e(TAG, "Shizuku returned invalid display ID")
+                FileLogger.e(TAG, "createVirtualDisplay returned invalid id=$id")
                 null
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create virtual display via Shizuku", e)
+            FileLogger.e(TAG, "createVirtualDisplay failed: ${e.javaClass.simpleName}: ${e.message}")
             displayId = -1
             null
         }
@@ -103,20 +109,26 @@ class VirtualDisplayManager {
         if (service == null) return -1
 
         return try {
+            FileLogger.i(TAG, "→ createVirtualDisplay secondary ${width}x${height}@${dpi}dpi", durable = true)
             val id = service.createVirtualDisplay(width, height, dpi, "Castla_Sec")
             if (id >= 0) {
                 service.setSurface(id, surface)
+                FileLogger.i(TAG, "secondary VD created id=$id")
                 id
             } else -1
         } catch (e: Exception) {
+            FileLogger.e(TAG, "secondary VD create failed: ${e.javaClass.simpleName}: ${e.message}")
             -1
         }
     }
 
     fun releaseSecondaryVirtualDisplay(id: Int) {
         try {
+            FileLogger.i(TAG, "→ release secondary VD id=$id", durable = true)
             privilegedService?.releaseVirtualDisplay(id)
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            FileLogger.w(TAG, "release secondary VD id=$id failed: ${e.javaClass.simpleName}")
+        }
     }
 
     fun launchAppOnSpecificDisplay(targetDisplayId: Int, packageName: String) {
@@ -162,11 +174,17 @@ class VirtualDisplayManager {
                 Log.w(TAG, "setPhysicalDisplayPower: no privileged service")
                 return false
             }
+            // Durable breadcrumb BEFORE the call: SurfaceControl.setDisplayPowerMode
+            // behind system_server's back is the riskiest call this app makes. If the
+            // phone reboots, this line (and no "result" line after it) is the tell.
+            FileLogger.w(TAG, "→ SurfaceControl panel power ${if (on) "ON" else "OFF"} (vd=$displayId)")
             svc.setPhysicalDisplayPower(on)
             Log.i(TAG, "Physical display power: ${if (on) "ON" else "OFF"}")
+            FileLogger.i(TAG, "← panel power ${if (on) "ON" else "OFF"} call returned")
             true
         } catch (e: Exception) {
             Log.w(TAG, "setPhysicalDisplayPower failed", e)
+            FileLogger.w(TAG, "panel power ${if (on) "ON" else "OFF"} failed: ${e.javaClass.simpleName}: ${e.message}")
             false
         }
     }
@@ -184,10 +202,12 @@ class VirtualDisplayManager {
     fun resizeDisplay(displayId: Int, width: Int, height: Int, dpi: Int): Boolean {
         if (displayId < 0) return false
         return try {
+            FileLogger.i(TAG, "→ resize VD $displayId to ${width}x${height}@${dpi}dpi", durable = true)
             privilegedService?.resizeVirtualDisplay(displayId, width, height, dpi)
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to resize VD $displayId", e)
+            FileLogger.e(TAG, "resize VD $displayId failed: ${e.javaClass.simpleName}: ${e.message}")
             false
         }
     }
@@ -267,6 +287,7 @@ class VirtualDisplayManager {
         val releasedId = displayId
         if (releasedId >= 0) {
             try {
+                FileLogger.i(TAG, "→ release primary VD id=$releasedId", durable = true)
                 privilegedService?.releaseVirtualDisplay(releasedId)
             } catch (e: android.os.DeadObjectException) {
                 // Binder is dead — the remote VD may be orphaned. Log prominently
@@ -295,6 +316,7 @@ class VirtualDisplayManager {
         val releasedId = displayId
         if (releasedId >= 0) {
             try {
+                FileLogger.i(TAG, "→ release primary VD id=$releasedId (full release)", durable = true)
                 privilegedService?.releaseVirtualDisplay(releasedId)
             } catch (e: android.os.DeadObjectException) {
                 Log.e(TAG, "CRITICAL: Binder dead releasing VD id=$releasedId during full release — VD may be orphaned", e)

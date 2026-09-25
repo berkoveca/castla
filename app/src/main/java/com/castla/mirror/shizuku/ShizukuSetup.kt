@@ -19,7 +19,9 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.castla.mirror.diagnostics.DiagnosticEvent
+import com.castla.mirror.diagnostics.FileLogger
 import com.castla.mirror.diagnostics.MirrorDiagnostics
+import com.castla.mirror.diagnostics.PostMortem
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import rikka.shizuku.Shizuku
@@ -227,6 +229,7 @@ class ShizukuSetup {
                 Log.w(TAG, "Failed to register death token", e)
             }
             Log.i(TAG, "Privileged service connected")
+            FileLogger.i(TAG, "Privileged service connected")
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -238,16 +241,19 @@ class ShizukuSetup {
             bindingInProgress = false
             userServiceBound = false
             Log.i(TAG, "Privileged service disconnected (alive=${aliveMs}ms)")
+            FileLogger.w(TAG, "Privileged service disconnected (alive=${aliveMs}ms) — its virtual displays are gone with it")
             if (aliveMs < USER_SERVICE_QUICK_DEATH_MS) {
                 userServiceQuickDeaths += 1
                 if (userServiceQuickDeaths <= USER_SERVICE_MAX_QUICK_DEATHS) {
                     Log.w(TAG, "User-service quick death #$userServiceQuickDeaths — scheduling force rebind")
+                    FileLogger.w(TAG, "User-service quick death #$userServiceQuickDeaths — scheduling force rebind")
                     pendingForceUnbind = true
                     if (isAvailable() && hasPermission()) {
                         mainHandler.post { bindPrivilegedService() }
                     }
                 } else {
                     Log.w(TAG, "User-service quick death #$userServiceQuickDeaths — giving up retries")
+                    FileLogger.e(TAG, "User-service quick death #$userServiceQuickDeaths — giving up retries")
                 }
             } else {
                 userServiceQuickDeaths = 0
@@ -286,6 +292,8 @@ class ShizukuSetup {
         if (aliveMs < QUICK_DEATH_WINDOW_MS) {
             consecutiveQuickDeaths += 1
             Log.w(TAG, "Quick death #$consecutiveQuickDeaths (alive ${aliveMs}ms)")
+            FileLogger.w(TAG, "Shizuku binder quick death #$consecutiveQuickDeaths (alive ${aliveMs}ms) — " +
+                "usually wireless ADB dropping (WiFi sleep / USB unplug → adbd restart)")
         } else {
             consecutiveQuickDeaths = 0
         }
@@ -668,6 +676,7 @@ class ShizukuSetup {
         } catch (e: Exception) {
             bindingInProgress = false
             Log.e(TAG, "Failed to bind privileged service", e)
+            FileLogger.e(TAG, "Failed to bind privileged service: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
@@ -804,6 +813,11 @@ class ShizukuSetup {
             Log.w(TAG, "ensureShizukuHardened: service not connected")
             return@synchronized false
         }
+        // Once per app process: read boot reason + system crash records from the
+        // shell side (own thread, does not delay hardening).
+        PostMortem.collectOnce { cmd ->
+            try { service.execCommand(cmd) } catch (e: Exception) { null }
+        }
 
         val fortifyResults = runFortify(service)
         val fortifySummary = fortifyResults.joinToString(",") { "${it.name}=${it.rc}" }
@@ -815,9 +829,11 @@ class ShizukuSetup {
             true
         } else {
             Log.i(TAG, "watchdog unhealthy ($verifyReason) — reinstalling")
+            FileLogger.w(TAG, "Shizuku watchdog unhealthy ($verifyReason) — reinstalling")
             installWatchdog(service)
         }
         Log.i(TAG, "ensureShizukuHardened: healthy=$healthy")
+        FileLogger.i(TAG, "ensureShizukuHardened: healthy=$healthy verify=$verifyReason")
         healthy
     }
 
@@ -953,6 +969,7 @@ class ShizukuSetup {
             val stageFailed = stageResults.any { it.rc != 0 } || stageResults.size != stageSteps.size
             if (stageFailed) {
                 Log.e(TAG, "installWatchdog stage failed: ${summarizeStepFailure(stageResults)}")
+                FileLogger.e(TAG, "installWatchdog stage failed: ${summarizeStepFailure(stageResults)}")
                 return false
             }
 
@@ -1006,9 +1023,11 @@ class ShizukuSetup {
             val swapFailed = swapResults.any { it.rc != 0 } || swapResults.size != swapSteps.size
             if (swapFailed) {
                 Log.e(TAG, "installWatchdog swap failed: ${summarizeStepFailure(swapResults)}")
+                FileLogger.e(TAG, "installWatchdog swap failed: ${summarizeStepFailure(swapResults)}")
                 return false
             }
             Log.i(TAG, "installWatchdog swap ok: $swapSummary")
+            FileLogger.i(TAG, "installWatchdog swap ok (outer watchdog respawned): $swapSummary")
 
             // Let the inner loop write heartbeat + PID files at least once
             Thread.sleep(2000L)
@@ -1022,6 +1041,7 @@ class ShizukuSetup {
             true
         } catch (e: Exception) {
             Log.e(TAG, "installWatchdog failed", e)
+            FileLogger.e(TAG, "installWatchdog failed: ${e.javaClass.simpleName}: ${e.message}")
             false
         }
     }

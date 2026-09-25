@@ -1,12 +1,21 @@
 package com.castla.mirror
 
 import android.app.Application
+import android.os.Build
+import android.os.Process
+import com.castla.mirror.diagnostics.CrashBreadcrumbs
+import com.castla.mirror.diagnostics.DiagnosticNames
 import com.castla.mirror.diagnostics.FileLogger
 
 class CastlaApp : Application() {
     override fun onCreate() {
         super.onCreate()
         FileLogger.init(this)
+        FileLogger.i("App", "APP_START pid=${Process.myPid()} version=${BuildConfig.VERSION_NAME}(${BuildConfig.VERSION_CODE}) " +
+            "${BuildConfig.BUILD_TYPE} device=${Build.MANUFACTURER} ${Build.MODEL} android=${Build.VERSION.RELEASE}(${Build.VERSION.SDK_INT})")
+        // Must run before any session can start: it reads what the previous process
+        // left behind (reboot? died mid-session? last heartbeat?) and then resets it.
+        CrashBreadcrumbs.onAppStart(this)
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
@@ -27,5 +36,18 @@ class CastlaApp : Application() {
             } catch (_: Throwable) {
             }
         }
+    }
+
+    /**
+     * Memory pressure is a leading indicator for the low-memory killer taking out
+     * this process — and cloudflared with it, since it is our child process.
+     */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        try {
+            FileLogger.i("App", "onTrimMemory ${DiagnosticNames.trimMemory(level)}($level) " +
+                "serviceRunning=${com.castla.mirror.service.MirrorForegroundService.isServiceRunning}",
+                durable = level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL)
+        } catch (_: Throwable) { }
     }
 }

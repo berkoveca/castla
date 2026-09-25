@@ -165,4 +165,46 @@ class FileLoggerTest {
         FileLogger.clear()
         assertEquals(0, FileLogger.getLogFiles().size)
     }
+
+    @Test
+    fun `readRecentTail spans the rotated and current files`() {
+        FileLogger.initForTest(tempFolder.root, maxFileBytes = 300)
+        repeat(12) { FileLogger.i("Tag", "entry-$it ${"x".repeat(30)}") }
+        assertTrue(File(tempFolder.root, "logs/mirror.log.1").exists())
+
+        val tail = FileLogger.readRecentTail(100_000)
+        val rotatedText = File(tempFolder.root, "logs/mirror.log.1").readText()
+        val firstRotated = rotatedText.lines().first { it.isNotBlank() }
+        assertTrue("rotated content missing: $tail", tail.contains(firstRotated))
+        assertTrue(tail.contains("entry-11"))
+        // Chronological order: rotated file first, current last.
+        assertTrue(tail.indexOf(firstRotated) < tail.indexOf("entry-11"))
+    }
+
+    @Test
+    fun `readRecentTail honors the budget and starts on a full line`() {
+        FileLogger.initForTest(tempFolder.root, maxFileBytes = 100_000)
+        repeat(50) { FileLogger.i("Tag", "entry-$it") }
+        val tail = FileLogger.readRecentTail(200)
+        assertTrue("len=${tail.length}", tail.length <= 200)
+        assertTrue(tail, tail.contains("entry-49"))
+        assertTrue(tail, tail.lines().first().matches(Regex("^\\d{4}-\\d{2}-\\d{2}T.*")))
+    }
+
+    @Test
+    fun `readRecentTail is empty when nothing was logged`() {
+        FileLogger.initForTest(tempFolder.root, maxFileBytes = 4096)
+        assertEquals("", FileLogger.readRecentTail(1_000))
+    }
+
+    @Test
+    fun `durable writes append like normal writes`() {
+        FileLogger.initForTest(tempFolder.root, maxFileBytes = 4096)
+        FileLogger.i("Tag", "plain")
+        FileLogger.i("Tag", "durable", durable = true)
+        FileLogger.w("Tag", "warn is always durable")
+        val lines = File(tempFolder.root, "logs/mirror.log").readText().lines().filter { it.isNotBlank() }
+        assertEquals(3, lines.size)
+        assertTrue(lines[1].contains(" I Tag: durable"))
+    }
 }
