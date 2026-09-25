@@ -116,6 +116,8 @@
     <string name="settings_logs_description">If mirroring fails, share or copy these logs to help diagnose the issue. URLs are redacted.</string>
     <string name="settings_share_logs">Share Logs</string>
     <string name="settings_copy_logs">Copy Recent</string>
+    <string name="settings_advanced">Advanced</string>
+    <string name="settings_advanced_hint">Resolution, codec, frame rate, audio, language. Defaults are tuned for the Tesla browser.</string>
     <string name="settings_logs_empty">No logs available yet.</string>
     <string name="settings_logs_copied">Recent logs copied to clipboard.</string>
     <string name="settings_logs_share_failed">Could not share logs.</string>

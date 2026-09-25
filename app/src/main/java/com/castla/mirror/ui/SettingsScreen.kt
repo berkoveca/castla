@@ -116,6 +116,7 @@ fun SettingsScreen(
     onSettingsChanged: (StreamSettings) -> Unit,
     onBackClick: () -> Unit
 ) {
+    var showAdvanced by remember { mutableStateOf(false) }
     MeshGradientBackground {
         Column(
             modifier = Modifier
@@ -193,131 +194,6 @@ fun SettingsScreen(
                     }
                 }
             }
-
-            // Resolution
-            SettingSection(title = stringResource(R.string.settings_max_resolution)) {
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    StreamSettings.Resolution.entries.forEach { res ->
-                        val localizedLabel = when (res) {
-                            StreamSettings.Resolution.AUTO -> stringResource(R.string.settings_res_auto)
-                            StreamSettings.Resolution.RES_720 -> stringResource(R.string.settings_res_720)
-                            StreamSettings.Resolution.RES_800 -> stringResource(R.string.settings_res_800)
-                            StreamSettings.Resolution.RES_960 -> stringResource(R.string.settings_res_960)
-                            StreamSettings.Resolution.RES_1080 -> stringResource(R.string.settings_res_1080)
-                            StreamSettings.Resolution.RES_1200 -> stringResource(R.string.settings_res_1200)
-                        }
-                        ModernOptionChip(
-                            text = localizedLabel,
-                            selected = settings.maxResolution == res,
-                            onClick = {
-                                if (!isStreaming) onSettingsChanged(settings.copy(maxResolution = res))
-                            },
-                            enabled = !isStreaming
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Streaming mode
-            SettingSection(title = stringResource(R.string.settings_streaming_mode)) {
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    StreamingMode.entries.forEach { mode ->
-                        val localizedLabel = when (mode) {
-                            StreamingMode.AUTO -> stringResource(R.string.settings_stream_auto)
-                            StreamingMode.WEBCODECS -> stringResource(R.string.settings_stream_webcodecs)
-                            StreamingMode.MJPEG -> stringResource(R.string.settings_stream_mjpeg)
-                            StreamingMode.MSE -> stringResource(R.string.settings_stream_mse)
-                        }
-                        ModernOptionChip(
-                            text = localizedLabel,
-                            selected = settings.streamingMode == mode,
-                            onClick = {
-                                if (!isStreaming) onSettingsChanged(settings.copy(streamingMode = mode))
-                            },
-                            enabled = !isStreaming
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // FPS
-            SettingSection(title = stringResource(R.string.settings_frame_rate)) {
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    StreamSettings.FPS_OPTIONS.forEach { fps ->
-                        val label = if (fps == StreamSettings.FPS_AUTO) {
-                            stringResource(R.string.settings_fps_auto)
-                        } else {
-                            "${fps}fps"
-                        }
-                        ModernOptionChip(
-                            text = label,
-                            selected = settings.fps == fps,
-                            onClick = {
-                                if (!isStreaming) onSettingsChanged(settings.copy(fps = fps))
-                            },
-                            enabled = !isStreaming
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Audio
-            SettingSection(title = stringResource(R.string.settings_audio_experimental)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = stringResource(R.string.settings_stream_device_audio),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = Color.White,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = stringResource(R.string.settings_audio_description),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.White.copy(alpha = 0.6f)
-                        )
-                    }
-                    Switch(
-                        checked = settings.audioEnabled,
-                        onCheckedChange = { enabled ->
-                            if (!isStreaming) onSettingsChanged(settings.copy(audioEnabled = enabled))
-                        },
-                        enabled = !isStreaming,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = Color(0xFF2979FF),
-                            uncheckedThumbColor = Color.White.copy(alpha = 0.7f),
-                            uncheckedTrackColor = Color.White.copy(alpha = 0.2f),
-                            uncheckedBorderColor = Color.Transparent
-                        )
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
 
             // Remote access & security: password gate + permanent Cloudflare URL
             run {
@@ -458,6 +334,229 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
+            // Diagnostic logs
+            run {
+                val context = LocalContext.current
+                val scope = rememberCoroutineScope()
+                var working by remember { mutableStateOf(false) }
+
+                SettingSection(title = stringResource(R.string.settings_logs_title)) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = stringResource(R.string.settings_logs_description),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White.copy(alpha = 0.7f),
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            Button(
+                                onClick = {
+                                    if (working) return@Button
+                                    working = true
+                                    scope.launch {
+                                        try {
+                                            shareLogs(context)
+                                        } finally {
+                                            working = false
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(12.dp),
+                                enabled = !working
+                            ) {
+                                Text(stringResource(R.string.settings_share_logs))
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    if (working) return@OutlinedButton
+                                    working = true
+                                    scope.launch {
+                                        try {
+                                            copyRecentLogs(context)
+                                        } finally {
+                                            working = false
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(12.dp),
+                                enabled = !working
+                            ) {
+                                Text(stringResource(R.string.settings_copy_logs))
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(40.dp))
+
+            // Everything below is optional tuning — collapsed so the screen stays simple.
+            // The defaults are tuned for the Tesla MCU2 browser over the Cloudflare tunnel.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { showAdvanced = !showAdvanced }
+                    .padding(vertical = 12.dp, horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.settings_advanced),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = stringResource(R.string.settings_advanced_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.6f)
+                    )
+                }
+                Text(
+                    text = if (showAdvanced) "▾" else "▸",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = Color.White.copy(alpha = 0.8f)
+                )
+            }
+
+            AnimatedVisibility(visible = showAdvanced) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+
+            // Resolution
+            SettingSection(title = stringResource(R.string.settings_max_resolution)) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    StreamSettings.Resolution.entries.forEach { res ->
+                        val localizedLabel = when (res) {
+                            StreamSettings.Resolution.AUTO -> stringResource(R.string.settings_res_auto)
+                            StreamSettings.Resolution.RES_720 -> stringResource(R.string.settings_res_720)
+                            StreamSettings.Resolution.RES_800 -> stringResource(R.string.settings_res_800)
+                            StreamSettings.Resolution.RES_960 -> stringResource(R.string.settings_res_960)
+                            StreamSettings.Resolution.RES_1080 -> stringResource(R.string.settings_res_1080)
+                            StreamSettings.Resolution.RES_1200 -> stringResource(R.string.settings_res_1200)
+                        }
+                        ModernOptionChip(
+                            text = localizedLabel,
+                            selected = settings.maxResolution == res,
+                            onClick = {
+                                if (!isStreaming) onSettingsChanged(settings.copy(maxResolution = res))
+                            },
+                            enabled = !isStreaming
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Streaming mode
+            SettingSection(title = stringResource(R.string.settings_streaming_mode)) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    StreamingMode.entries.forEach { mode ->
+                        val localizedLabel = when (mode) {
+                            StreamingMode.AUTO -> stringResource(R.string.settings_stream_auto)
+                            StreamingMode.WEBCODECS -> stringResource(R.string.settings_stream_webcodecs)
+                            StreamingMode.MJPEG -> stringResource(R.string.settings_stream_mjpeg)
+                            StreamingMode.MSE -> stringResource(R.string.settings_stream_mse)
+                        }
+                        ModernOptionChip(
+                            text = localizedLabel,
+                            selected = settings.streamingMode == mode,
+                            onClick = {
+                                if (!isStreaming) onSettingsChanged(settings.copy(streamingMode = mode))
+                            },
+                            enabled = !isStreaming
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // FPS
+            SettingSection(title = stringResource(R.string.settings_frame_rate)) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    StreamSettings.FPS_OPTIONS.forEach { fps ->
+                        val label = if (fps == StreamSettings.FPS_AUTO) {
+                            stringResource(R.string.settings_fps_auto)
+                        } else {
+                            "${fps}fps"
+                        }
+                        ModernOptionChip(
+                            text = label,
+                            selected = settings.fps == fps,
+                            onClick = {
+                                if (!isStreaming) onSettingsChanged(settings.copy(fps = fps))
+                            },
+                            enabled = !isStreaming
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Audio
+            SettingSection(title = stringResource(R.string.settings_audio_experimental)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.settings_stream_device_audio),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = Color.White,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.settings_audio_description),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White.copy(alpha = 0.6f)
+                        )
+                    }
+                    Switch(
+                        checked = settings.audioEnabled,
+                        onCheckedChange = { enabled ->
+                            if (!isStreaming) onSettingsChanged(settings.copy(audioEnabled = enabled))
+                        },
+                        enabled = !isStreaming,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = Color(0xFF2979FF),
+                            uncheckedThumbColor = Color.White.copy(alpha = 0.7f),
+                            uncheckedTrackColor = Color.White.copy(alpha = 0.2f),
+                            uncheckedBorderColor = Color.Transparent
+                        )
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
             // Language
             run {
                 val languages = listOf(
@@ -566,68 +665,10 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            // Diagnostic logs
-            run {
-                val context = LocalContext.current
-                val scope = rememberCoroutineScope()
-                var working by remember { mutableStateOf(false) }
-
-                SettingSection(title = stringResource(R.string.settings_logs_title)) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = stringResource(R.string.settings_logs_description),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color.White.copy(alpha = 0.7f),
-                            textAlign = TextAlign.Center
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            Button(
-                                onClick = {
-                                    if (working) return@Button
-                                    working = true
-                                    scope.launch {
-                                        try {
-                                            shareLogs(context)
-                                        } finally {
-                                            working = false
-                                        }
-                                    }
-                                },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(12.dp),
-                                enabled = !working
-                            ) {
-                                Text(stringResource(R.string.settings_share_logs))
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            OutlinedButton(
-                                onClick = {
-                                    if (working) return@OutlinedButton
-                                    working = true
-                                    scope.launch {
-                                        try {
-                                            copyRecentLogs(context)
-                                        } finally {
-                                            working = false
-                                        }
-                                    }
-                                },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(12.dp),
-                                enabled = !working
-                            ) {
-                                Text(stringResource(R.string.settings_copy_logs))
-                            }
-                        }
-                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(40.dp))
+            Spacer(modifier = Modifier.height(32.dp))
 
             // Current config summary
             Box(
