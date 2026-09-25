@@ -751,7 +751,7 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
             }
             val resp = if (path == "index.html") {
                 val html = stream.bufferedReader().use { it.readText() }
-                newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8",
+                newFixedLengthResponse(Response.Status.OK, mimeType,
                     AssetCachePolicy.versionUrls(html, assetVersion))
             } else {
                 newChunkedResponse(Response.Status.OK, mimeType, stream)
