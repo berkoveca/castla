@@ -1973,9 +1973,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function updateOverlayControlsVisibility() {
-        const active = homeBtn && homeBtn.style.display !== 'none';
-        if (overlayMenu) overlayMenu.style.display = active ? 'flex' : 'none';
-        if (!active) collapseOverlayMenu();
+        // The ☰ menu (Refresh, Quality, keep-awake…) is always available — also on
+        // the app grid, where it used to be hidden so Quality could not be found.
+        // Only the Home button inside it depends on an app being open.
+        if (overlayMenu) overlayMenu.style.display = 'flex';
+        const appOpen = homeBtn && homeBtn.style.display !== 'none';
+        if (!appOpen && overlayMenuPanel && overlayMenuPanel.style.display === 'flex') {
+            // Returning to the grid: close any open popup, keep the menu button.
+            if (densityPopup) densityPopup.style.display = 'none';
+            if (qualityPopup) qualityPopup.style.display = 'none';
+        }
     }
 
     // ── Playback Profile UI ──
