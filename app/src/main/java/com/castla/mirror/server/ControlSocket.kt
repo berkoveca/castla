@@ -138,6 +138,12 @@ class ControlSocket(
                 "refresh" -> {
                     server.onRefreshRequest()
                 }
+                "launcherPrefs" -> {
+                    fun list(name: String): List<String>? = json.optJSONArray(name)?.let { arr ->
+                        List(arr.length()) { arr.optString(it) }
+                    }
+                    server.onLauncherPrefs(list("favorites"), list("recent"))
+                }
                 "setQuality" -> {
                     server.onQualityRequest(
                         resolution = json.optString("resolution", "").takeIf { it.isNotEmpty() },

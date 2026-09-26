@@ -1448,6 +1448,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 layoutMode: data.layoutMode || 'single'
             });
 
+            syncLauncherPrefsFromPhone(data.favorites, data.recent);
             renderLauncherApps(apps);
             renderSplitLauncherApps(apps);
         } catch (err) {
@@ -1535,6 +1536,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const i = favs.indexOf(pkg);
         if (i >= 0) favs.splice(i, 1); else favs.push(pkg);
         storageSet('castla_favorites', JSON.stringify(favs));
+        pushLauncherPrefsToPhone();
         showAutoTierToast(i >= 0 ? 'Removed from Favorites' : 'Added to Favorites');
         renderLauncherResults();
     }
@@ -1542,6 +1544,28 @@ document.addEventListener('DOMContentLoaded', async () => {
         const recent = storageList('castla_recent').filter(p => p !== pkg);
         recent.unshift(pkg);
         storageSet('castla_recent', JSON.stringify(recent.slice(0, RECENT_MAX)));
+        pushLauncherPrefsToPhone();
+    }
+
+    // Favorites / recent are kept on the phone (so they are in its settings backup
+    // and the same in any car browser); this browser keeps a copy.
+    function pushLauncherPrefsToPhone() {
+        if (!controlSocket || controlSocket.readyState !== WebSocket.OPEN) return;
+        controlSocket.send(JSON.stringify({
+            type: 'launcherPrefs',
+            favorites: storageList('castla_favorites'),
+            recent: storageList('castla_recent'),
+        }));
+    }
+
+    function syncLauncherPrefsFromPhone(favorites, recent) {
+        const phoneHas = (Array.isArray(favorites) && favorites.length > 0) || (Array.isArray(recent) && recent.length > 0);
+        if (phoneHas) {
+            storageSet('castla_favorites', JSON.stringify(favorites || []));
+            storageSet('castla_recent', JSON.stringify(recent || []));
+        } else if (storageList('castla_favorites').length > 0 || storageList('castla_recent').length > 0) {
+            pushLauncherPrefsToPhone(); // first run after update: move this car's lists to the phone
+        }
     }
 
     function normalizeForSearch(text) {

@@ -48,6 +48,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.os.LocaleListCompat
 import com.castla.mirror.network.TunnelSecurityConfig
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import com.castla.mirror.backup.SettingsBackup
 
 @Composable
 fun MeshGradientBackground(content: @Composable BoxScope.() -> Unit) {
@@ -532,6 +535,113 @@ fun SettingsScreen(
                             enabled = true
                         )
                     }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Backup & restore: all settings + car favorites to a JSON file that survives uninstall
+            run {
+                val ctx = LocalContext.current
+                val scope = rememberCoroutineScope()
+                var includeSecrets by remember { mutableStateOf(false) }
+                var showExportDialog by remember { mutableStateOf(false) }
+                val exportLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.CreateDocument("application/json")
+                ) { uri: Uri? ->
+                    if (uri == null) return@rememberLauncherForActivityResult
+                    val secrets = includeSecrets
+                    scope.launch {
+                        val ok = withContext(Dispatchers.IO) {
+                            try {
+                                val json = SettingsBackup.export(ctx, secrets, BuildConfig.VERSION_NAME)
+                                ctx.contentResolver.openOutputStream(uri, "wt")?.use { it.write(json.toByteArray()) } != null
+                            } catch (e: Exception) {
+                                FileLogger.w("Backup", "export failed: ${e.javaClass.simpleName}: ${e.message}")
+                                false
+                            }
+                        }
+                        Toast.makeText(ctx, ctx.getString(if (ok) R.string.backup_exported else R.string.backup_failed), Toast.LENGTH_LONG).show()
+                    }
+                }
+                val importLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.OpenDocument()
+                ) { uri: Uri? ->
+                    if (uri == null) return@rememberLauncherForActivityResult
+                    scope.launch {
+                        val message = withContext(Dispatchers.IO) {
+                            try {
+                                val json = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+                                    ?: throw IllegalArgumentException("Cannot read file")
+                                val result = SettingsBackup.import(ctx, json)
+                                // Reset cached security config so the restored password / token apply.
+                                TunnelSecurityConfig.save(ctx, TunnelSecurityConfig.load(ctx))
+                                FileLogger.i("Backup", "imported ${result.entries} settings (secrets=${result.includedSecrets})")
+                                ctx.getString(R.string.backup_imported, result.entries)
+                            } catch (e: Exception) {
+                                FileLogger.w("Backup", "import failed: ${e.javaClass.simpleName}: ${e.message}")
+                                ctx.getString(R.string.backup_import_failed, e.message ?: e.javaClass.simpleName)
+                            }
+                        }
+                        onSettingsChanged(StreamSettings.load(ctx))
+                        Toast.makeText(ctx, message, Toast.LENGTH_LONG).show()
+                    }
+                }
+
+                SettingSection(title = stringResource(R.string.backup_title)) {
+                    Text(
+                        text = stringResource(R.string.backup_description),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.6f),
+                        modifier = Modifier.padding(bottom = 10.dp)
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedButton(onClick = { showExportDialog = true }, modifier = Modifier.weight(1f)) {
+                            Text(stringResource(R.string.backup_export))
+                        }
+                        OutlinedButton(
+                            onClick = { importLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(stringResource(R.string.backup_import))
+                        }
+                    }
+                }
+
+                if (showExportDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showExportDialog = false },
+                        title = { Text(stringResource(R.string.backup_export)) },
+                        text = {
+                            Column {
+                                Text(stringResource(R.string.backup_export_dialog))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(top = 12.dp).clickable { includeSecrets = !includeSecrets }
+                                ) {
+                                    Checkbox(checked = includeSecrets, onCheckedChange = { includeSecrets = it })
+                                    Text(stringResource(R.string.backup_include_secrets))
+                                }
+                                if (includeSecrets) {
+                                    Text(
+                                        stringResource(R.string.backup_secrets_warning),
+                                        color = Color(0xFFFF8A65),
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                showExportDialog = false
+                                val date = java.text.SimpleDateFormat("yyyyMMdd-HHmm", java.util.Locale.US).format(java.util.Date())
+                                exportLauncher.launch("castla-backup-$date.json")
+                            }) { Text(stringResource(R.string.backup_export_choose_file)) }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showExportDialog = false }) { Text(stringResource(android.R.string.cancel)) }
+                        }
+                    )
                 }
             }
 

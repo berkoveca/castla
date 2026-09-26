@@ -173,6 +173,14 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         onQualityListener = listener
     }
     fun onRefreshRequest() { onRefreshListener?.invoke() }
+    /** Car app grid changed favorites / recent: saved on the phone. */
+    fun onLauncherPrefs(favorites: List<String>?, recent: List<String>?) {
+        try {
+            com.castla.mirror.backup.LauncherStore.save(context, favorites, recent)
+        } catch (e: Exception) {
+            Log.w(TAG, "launcher prefs save failed", e)
+        }
+    }
     fun onQualityRequest(resolution: String?, fps: Int?, mode: String?, keepAwake: Boolean?) {
         onQualityListener?.invoke(resolution, fps, mode, keepAwake)
     }
@@ -817,6 +825,9 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
                 put("autoFit", true)
                 put("layoutMode", "single")
                 put("apps", jsonArray)
+                // Car app grid favorites / recent live on the phone (backup + any car browser).
+                put("favorites", org.json.JSONArray(com.castla.mirror.backup.LauncherStore.favorites(context)))
+                put("recent", org.json.JSONArray(com.castla.mirror.backup.LauncherStore.recent(context)))
             }
             
             return newFixedLengthResponse(Response.Status.OK, "application/json", responseObj.toString())
