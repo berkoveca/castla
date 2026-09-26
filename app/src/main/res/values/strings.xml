@@ -92,10 +92,14 @@
 
     <!-- Remote access & security (Cloudflare tunnel + password gate) -->
     <string name="settings_remote_access_title">Remote Access &amp; Security</string>
-    <string name="settings_auth_enabled">Password protect</string>
-    <string name="settings_auth_description">Show a login page before the mirror loads. Works over any tunnel (trycloudflare, your own domain, or local Wi‑Fi).</string>
+    <string name="settings_auth_enabled">Access password (required)</string>
+    <string name="settings_auth_description">Anyone who opens your Castla address must enter this password before they can see or control the phone. Without a password remote access is blocked.</string>
     <string name="settings_auth_password">Password</string>
-    <string name="settings_auth_password_hint">Leave empty to disable</string>
+    <string name="settings_auth_password_hint">At least 8 characters</string>
+    <string name="settings_auth_too_short">Too short — remote access stays blocked until the password has at least %1$d characters</string>
+    <string name="home_tunnel_password_missing">No access password set — the car cannot connect. Set one in Settings.</string>
+    <string name="settings_auth_sign_out_all">Sign out all devices</string>
+    <string name="settings_auth_signed_out">All devices signed out — they must enter the password again</string>
     <string name="settings_named_tunnel_label">Permanent Cloudflare URL (optional)</string>
     <string name="settings_named_enabled">Use permanent tunnel</string>
     <string name="settings_named_enabled_description">When on, the app runs only your permanent Cloudflare tunnel instead of the temporary trycloudflare.com one. Requires a connector token.</string>

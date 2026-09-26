@@ -90,11 +90,36 @@ data class TunnelSecurityConfig(
             return sha256Hex(seed)
         }
 
+        /**
+         * Remote access always requires the password: there is no "auth off" mode
+         * any more (the server is reachable from the internet). No/short password
+         * means no session is ever valid.
+         */
         fun isValidSession(context: Context, config: TunnelSecurityConfig, cookie: String?): Boolean {
-            if (!config.authEnabled || config.authPassword.isEmpty()) return true
+            if (!passwordSet(config)) return false
             if (cookie.isNullOrEmpty()) return false
             val expected = sessionToken(context, config.authPassword)
             return MessageDigest.isEqual(cookie.toByteArray(), expected.toByteArray())
+        }
+
+        fun passwordSet(config: TunnelSecurityConfig): Boolean =
+            com.castla.mirror.server.AccessPolicy.passwordIsStrongEnough(config.authPassword)
+
+        /** Constant-time password check (no early exit that leaks the matching prefix length). */
+        fun passwordMatches(config: TunnelSecurityConfig, submitted: String?): Boolean {
+            if (!passwordSet(config) || submitted == null) return false
+            return MessageDigest.isEqual(sha256Hex(submitted).toByteArray(), sha256Hex(config.authPassword).toByteArray())
+        }
+
+        /** Invalidates every issued session cookie ("sign out all devices"). */
+        @Synchronized
+        fun revokeAllSessions(context: Context) {
+            val bytes = ByteArray(32)
+            SecureRandom().nextBytes(bytes)
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                .putString(KEY_AUTH_SECRET, bytes.toHex()).apply()
+            sessionSecretCache.remove(PREFS_NAME)
+            Log.i(TAG, "All sessions revoked (new session secret)")
         }
 
         fun sha256Hex(input: String): String =

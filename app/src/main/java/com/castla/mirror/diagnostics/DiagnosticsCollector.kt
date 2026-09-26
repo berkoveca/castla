@@ -24,6 +24,7 @@ object DiagnosticsCollector {
             "App / device" to appDeviceLines(context),
             "Health now" to listOf(safe { HealthMonitor.snapshot(context, tunnel) }),
             "Mirroring session" to sessionLines(),
+            "Security" to safeList { securityLines(context) },
             "Reboot check (from previous run)" to CrashBreadcrumbs.summaryLines(),
             "Previous app exits (Android records, newest first)" to safeList { CrashBreadcrumbs.exitReasonLines(context) },
             "Post-mortem (via Shizuku shell)" to PostMortem.summaryLines(),
@@ -31,6 +32,17 @@ object DiagnosticsCollector {
         )
         val log = if (includeLog) safe { FileLogger.readRecentTail(maxChars) } else ""
         return DiagnosticReport.build("Castla diagnostic report", sections, log, maxChars)
+    }
+
+    private fun securityLines(context: Context): List<String> {
+        val cfg = com.castla.mirror.network.TunnelSecurityConfig.load(context)
+        val set = com.castla.mirror.network.TunnelSecurityConfig.passwordSet(cfg)
+        return listOf(
+            "access password: ${if (set) "set (${cfg.authPassword.length} chars) — every page, app list, icon and live connection requires login"
+                else "NOT SET or too short — all remote access is blocked"}",
+            "connected viewers (can see and control the phone):"
+        ) + com.castla.mirror.server.MirrorServer.viewersSummary().map { "  $it" } +
+            "login attempts, rejections and accepted connections are in the log as 'Auth:' lines"
     }
 
     private fun appDeviceLines(context: Context): List<String> {

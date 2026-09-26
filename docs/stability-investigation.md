@@ -274,3 +274,29 @@ covered with synthetic downs.
 free pointer id (single tap = id 0), all active pointers per event with `ACTION_POINTER_DOWN/UP`
 + index, one `downTime` per gesture, unknown moves/ups dropped, stale gestures cancelled — and
 `PrivilegedService.injectMotionEvent` injects them with finger tool type and pressure 0 on lift.
+
+## Security model (remote access)
+
+The mirror server is reachable from the public internet (Cloudflare tunnel) and from any
+device on the phone's network, and a session can see the phone's screen and control it.
+
+Audit findings (fixed):
+- Password protection was optional and **off by default** → anyone with the URL had full control.
+- `/api/apps` and `/api/icon` **bypassed** the password gate (installed-app list leaked).
+- No brute-force protection; password compared with `==`; password accepted in the URL (`GET /auth?password=`).
+- Cookie without `SameSite`/`Secure`, 90 days, no way to revoke; WebSockets had no Origin check;
+  no `..` path check; login attempts not persisted.
+
+Now (`AccessPolicy`, `LoginThrottle`, both unit-tested; `MirrorServerAuthTest`):
+- A password of ≥ 8 characters is **mandatory**. Without it every page, API and live
+  connection is refused and a "Castla is locked — set a password" page is shown.
+- Every page, `/api/*` and every WebSocket (video, audio, control) requires a valid session
+  cookie; only `/favicon.ico` is public. WebSockets must also come from our own origin.
+- Login: POST only, never from the URL, constant-time compare; 5 wrong passwords lock that
+  client (real IP via `CF-Connecting-IP`) for 15 min, 20 wrong in 10 min lock all logins for 10 min.
+- Cookie: `HttpOnly; SameSite=Lax; Secure` (over https), 30 days; **Sign out all devices**
+  rotates the session secret; changing the password also invalidates every cookie.
+- `X-Frame-Options: DENY`, `nosniff`, `no-referrer` on every response; `..` paths refused.
+- Log/report: every login OK/FAILED/BLOCKED, rejected and accepted live connection (masked IP,
+  browser) as `Auth:` lines; report section "Security" lists the password state and the
+  currently connected viewers.

@@ -208,53 +208,48 @@ fun SettingsScreen(
 
                 SettingSection(title = stringResource(R.string.settings_remote_access_title)) {
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        // Password gate toggle
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                        // Access password: ALWAYS required for remote access (the server is
+                        // reachable from the internet and a session controls the phone).
+                        Text(
+                            text = stringResource(R.string.settings_auth_enabled),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = Color.White,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.settings_auth_description),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White.copy(alpha = 0.6f)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = tunnelCfg.authPassword,
+                            onValueChange = { pw -> update { it.copy(authEnabled = true, authPassword = pw) } },
+                            label = { Text(stringResource(R.string.settings_auth_password)) },
+                            placeholder = { Text(stringResource(R.string.settings_auth_password_hint)) },
+                            singleLine = true,
+                            isError = !com.castla.mirror.server.AccessPolicy.passwordIsStrongEnough(tunnelCfg.authPassword),
+                            supportingText = {
+                                if (!com.castla.mirror.server.AccessPolicy.passwordIsStrongEnough(tunnelCfg.authPassword)) {
+                                    Text(stringResource(R.string.settings_auth_too_short, com.castla.mirror.server.AccessPolicy.MIN_PASSWORD_LENGTH))
+                                }
+                            },
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color.White),
+                            colors = authFieldColors(),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                TunnelSecurityConfig.revokeAllSessions(context)
+                                android.widget.Toast.makeText(context, R.string.settings_auth_signed_out, android.widget.Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = stringResource(R.string.settings_auth_enabled),
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = Color.White,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = stringResource(R.string.settings_auth_description),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color.White.copy(alpha = 0.6f)
-                                )
-                            }
-                            Switch(
-                                checked = tunnelCfg.authEnabled,
-                                onCheckedChange = { enabled -> update { it.copy(authEnabled = enabled) } },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color.White,
-                                    checkedTrackColor = Color(0xFF2979FF),
-                                    uncheckedThumbColor = Color.White.copy(alpha = 0.7f),
-                                    uncheckedTrackColor = Color.White.copy(alpha = 0.2f),
-                                    uncheckedBorderColor = Color.Transparent
-                                )
-                            )
-                        }
-
-                        if (tunnelCfg.authEnabled) {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            OutlinedTextField(
-                                value = tunnelCfg.authPassword,
-                                onValueChange = { pw -> update { it.copy(authPassword = pw) } },
-                                label = { Text(stringResource(R.string.settings_auth_password)) },
-                                placeholder = { Text(stringResource(R.string.settings_auth_password_hint)) },
-                                singleLine = true,
-                                visualTransformation = PasswordVisualTransformation(),
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                                textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color.White),
-                                colors = authFieldColors(),
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                            Text(stringResource(R.string.settings_auth_sign_out_all))
                         }
 
                         Spacer(modifier = Modifier.height(20.dp))

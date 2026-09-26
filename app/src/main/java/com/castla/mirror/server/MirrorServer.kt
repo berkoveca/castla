@@ -23,6 +23,12 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         private const val TAG = "MirrorServer"
         const val DEFAULT_PORT = 9090
         private const val COOKIE_AUTH = "castla_auth"
+
+        /** Logged-in viewers with an open control connection (who can see AND control the phone). */
+        private val activeViewers = java.util.concurrent.ConcurrentHashMap<Any, String>()
+
+        fun viewersSummary(): List<String> =
+            activeViewers.values.sorted().ifEmpty { listOf("none") }
         private val REPLAYED_TYPES = listOf("streamingMode", "streamCodec")
     }
 
@@ -241,6 +247,7 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
 
     fun unregisterControlSocket(socket: ControlSocket) {
         controlSockets.remove(socket)
+        activeViewers.remove(socket)
         Log.i(TAG, "Control client disconnected (total: ${controlSockets.size})")
         updateConnectionState()
     }
@@ -485,33 +492,37 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
 
     override fun openWebSocket(handshake: IHTTPSession): WebSocket {
         val config = TunnelSecurityConfig.load(context)
-        if (config.authEnabled) {
-            val cookieValue = parseCookie(handshake.headers["cookie"], COOKIE_AUTH)
-            if (!TunnelSecurityConfig.isValidSession(context, config, cookieValue)) {
-                Log.i(TAG, "Rejecting WebSocket handshake: missing/invalid auth cookie")
-                FileLogger.w("Auth", "REJECTED live connection ${handshake.uri} (no valid login) " +
-                    "src=${DiagnosticSanitizer.maskIp(handshake.remoteIpAddress)} " +
-                    "ua=${DiagnosticSanitizer.safeMessage(handshake.headers["user-agent"] ?: "<none>")}")
-                throw NanoWSD.WebSocketException(
-                    NanoWSD.WebSocketFrame.CloseCode.NormalClosure,
-                    "Unauthorized"
-                )
-            }
+        val who = describeClient(handshake)
+        // Every live connection (screen, audio, CONTROL of the phone) needs a valid
+        // login — there is no password-less mode — and must come from our own page.
+        val cookieValue = parseCookie(handshake.headers["cookie"], COOKIE_AUTH)
+        val reason = when {
+            !TunnelSecurityConfig.passwordSet(config) -> "no password set in the app"
+            !TunnelSecurityConfig.isValidSession(context, config, cookieValue) -> "no valid login"
+            !AccessPolicy.originAllowed(handshake.headers["origin"], handshake.headers["host"]) ->
+                "foreign origin ${DiagnosticSanitizer.safeMessage(handshake.headers["origin"].orEmpty())}"
+            else -> null
+        }
+        if (reason != null) {
+            Log.i(TAG, "Rejecting WebSocket handshake: $reason")
+            FileLogger.w("Auth", "REJECTED live connection ${handshake.uri} ($reason) $who")
+            throw NanoWSD.WebSocketException(NanoWSD.WebSocketFrame.CloseCode.PolicyViolation, "Unauthorized")
         }
 
         val uri = handshake.uri
         if (uri.startsWith("/ws/control")) {
             // One line per viewer session: who is actually connected (and so can see and control the phone).
-            FileLogger.i("Auth", "live connection accepted (${if (config.authEnabled && config.authPassword.isNotEmpty()) "logged in" else "NO PASSWORD SET"}) " +
-                "src=${DiagnosticSanitizer.maskIp(handshake.remoteIpAddress)} " +
-                "ua=${DiagnosticSanitizer.safeMessage(handshake.headers["user-agent"] ?: "<none>")}", durable = true)
+            FileLogger.i("Auth", "live connection accepted (logged in) $who", durable = true)
         }
         val channel = handshake.parameters["channel"]?.firstOrNull()
             ?: if (uri.contains("secondary")) "secondary" else "primary"
 
         return when {
             uri.startsWith("/ws/video") -> VideoStreamSocket(handshake, this, channel)
-            uri.startsWith("/ws/control") -> ControlSocket(handshake, this)
+            uri.startsWith("/ws/control") -> ControlSocket(handshake, this).also { socket ->
+                val since = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+                activeViewers[socket] = "since $since $who"
+            }
             uri.startsWith("/ws/audio") -> AudioStreamSocket(handshake, this)
             else -> VideoStreamSocket(handshake, this, channel)
         }
@@ -522,13 +533,15 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         var uri = session.uri
         if (uri == "/") uri = "/index.html"
         val config = TunnelSecurityConfig.load(context)
+        val passwordSet = TunnelSecurityConfig.passwordSet(config)
+        val validSession = TunnelSecurityConfig.isValidSession(
+            context, config, parseCookie(session.headers["cookie"], COOKIE_AUTH)
+        )
         if (uri == "/index.html") {
-            // auth=off means anyone who has the tunnel URL gets the launcher and control.
             MirrorDiagnostics.log(
                 DiagnosticEvent.PAGE_LOAD,
-                "src=${DiagnosticSanitizer.maskIp(session.remoteIpAddress)} " +
-                    "auth=${if (config.authEnabled && config.authPassword.isNotEmpty()) "on" else "OFF"} " +
-                    "ua=${DiagnosticSanitizer.safeMessage(session.headers["user-agent"] ?: "<none>")}"
+                "${describeClient(session)} password=${if (passwordSet) "set" else "NOT SET (all access blocked)"} " +
+                    "session=${if (validSession) "logged-in" else "none (login page shown)"}"
             )
         }
 
@@ -544,30 +557,31 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         }
 
         val response = when {
-            // Password login — validate and issue the session cookie
+            !AccessPolicy.isSafePath(uri) ->
+                newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Bad request")
+
+            // Password login — POST only, rate-limited, issues the session cookie
             uri == "/auth" -> handleAuthSubmit(session, config)
 
-            // API routes bypass the auth gate (no sensitive data; used pre-login too)
-            uri == "/api/apps" -> serveAppList()
-            uri.startsWith("/api/icon") -> {
-                val pkg = session.parameters["pkg"]?.firstOrNull()
-                if (pkg != null) serveAppIcon(pkg) else serveAsset(uri)
-            }
-
-            // Auth gate — block every page until a valid session cookie is present
-            config.authEnabled -> {
-                val cookieValue = parseCookie(session.headers["cookie"], COOKIE_AUTH)
-                if (!TunnelSecurityConfig.isValidSession(context, config, cookieValue)) {
-                    if (uri != "/login.html" && uri != "/favicon.ico") serveLoginPage() else serveAsset(uri)
-                } else {
-                    serveAsset(uri)
+            else -> when (AccessPolicy.httpDecision(uri, validSession, passwordSet)) {
+                AccessPolicy.Decision.SETUP_REQUIRED -> serveSetupRequiredPage()
+                AccessPolicy.Decision.LOGIN ->
+                    if (uri.startsWith("/api/")) newFixedLengthResponse(Response.Status.UNAUTHORIZED, "text/plain", "Login required")
+                    else serveLoginPage()
+                AccessPolicy.Decision.ALLOW -> when {
+                    uri == "/api/apps" -> serveAppList()
+                    uri.startsWith("/api/icon") -> {
+                        val pkg = session.parameters["pkg"]?.firstOrNull()
+                        if (pkg != null) serveAppIcon(pkg) else newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not Found")
+                    }
+                    else -> serveAsset(uri)
                 }
             }
-            else -> serveAsset(uri)
         }
         // Discourage keep-alive reuse so residual bytes can never corrupt a
         // follow-up request on the same connection.
         response.addHeader("Connection", "close")
+        addSecurityHeaders(response)
         return response
     }
 
@@ -582,12 +596,30 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
     }
 
     private fun handleAuthSubmit(session: IHTTPSession, config: TunnelSecurityConfig): Response {
+        val who = describeClient(session)
+        if (!TunnelSecurityConfig.passwordSet(config)) return serveSetupRequiredPage()
+        if (session.method != NanoHTTPD.Method.POST) {
+            return newFixedLengthResponse(Response.Status.METHOD_NOT_ALLOWED, "text/plain", "POST only")
+        }
+        val key = AccessPolicy.clientKey(session.remoteIpAddress, session.headers["cf-connecting-ip"])
+        val now = android.os.SystemClock.elapsedRealtime()
+        val lockedMs = loginThrottle.lockedForMs(key, now)
+        if (lockedMs > 0) {
+            FileLogger.w("Auth", "LOGIN BLOCKED (too many wrong passwords, ${lockedMs / 1000}s left) $who")
+            return serveLoginPage(showError = true)
+        }
+        // A password in the URL ends up in proxy logs and browser history: never accept it.
+        if (session.queryParameterString.orEmpty().contains("password", ignoreCase = true)) {
+            loginThrottle.onFailure(key, now)
+            FileLogger.w("Auth", "LOGIN REFUSED (password sent in URL) $who")
+            return serveLoginPage(showError = true)
+        }
         val submitted = extractPassword(session)
-        if (config.authPassword.isNotEmpty() && submitted == config.authPassword) {
+        if (TunnelSecurityConfig.passwordMatches(config, submitted)) {
+            loginThrottle.onSuccess(key)
             val token = TunnelSecurityConfig.sessionToken(context, config.authPassword)
             Log.i(TAG, "Auth success from ${session.remoteIpAddress}")
-            FileLogger.w("Auth", "LOGIN OK src=${DiagnosticSanitizer.maskIp(session.remoteIpAddress)} " +
-                "ua=${DiagnosticSanitizer.safeMessage(session.headers["user-agent"] ?: "<none>")}")
+            FileLogger.w("Auth", "LOGIN OK $who")
             val resp = newFixedLengthResponse(
                 Response.Status.REDIRECT,
                 "text/html",
@@ -596,13 +628,39 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
             resp.addHeader("Location", "/")
             // 90-day cookie; survives pipeline restarts because the session secret
             // is persistent. HttpOnly to keep the token off the page's JS.
-            resp.addHeader("Set-Cookie", "$COOKIE_AUTH=$token; Path=/; HttpOnly; Max-Age=7776000")
+            resp.addHeader("Set-Cookie", AccessPolicy.sessionCookie(token, secure = AccessPolicy.isHttps(session.headers)))
+            addSecurityHeaders(resp)
             return resp
         }
+        loginThrottle.onFailure(key, now)
         Log.w(TAG, "Auth failed from ${session.remoteIpAddress}")
-        FileLogger.w("Auth", "LOGIN FAILED (wrong password) src=${DiagnosticSanitizer.maskIp(session.remoteIpAddress)} " +
-            "ua=${DiagnosticSanitizer.safeMessage(session.headers["user-agent"] ?: "<none>")}")
+        FileLogger.w("Auth", "LOGIN FAILED (wrong password) $who")
         return serveLoginPage(showError = true)
+    }
+
+    private val loginThrottle = LoginThrottle()
+
+    /** Masked client address (the real one for tunnel traffic) + browser, for the security log. */
+    private fun describeClient(session: IHTTPSession): String {
+        val cf = session.headers["cf-connecting-ip"]
+        val ip = AccessPolicy.clientKey(session.remoteIpAddress, cf)
+        val via = if (cf.isNullOrBlank()) "local" else "tunnel"
+        return "src=${DiagnosticSanitizer.maskIp(ip)} via=$via " +
+            "ua=${DiagnosticSanitizer.safeMessage(session.headers["user-agent"] ?: "<none>").take(160)}"
+    }
+
+    private fun addSecurityHeaders(response: Response) {
+        response.addHeader("X-Frame-Options", "DENY")
+        response.addHeader("X-Content-Type-Options", "nosniff")
+        response.addHeader("Referrer-Policy", "no-referrer")
+    }
+
+    private fun serveSetupRequiredPage(): Response {
+        val html = "<!DOCTYPE html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>" +
+            "<body style=\"background:#0a0a12;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center\">" +
+            "<div><h2>Castla is locked</h2><p>Remote access needs a password.<br>On the phone open Castla &rarr; Settings &rarr; set an access password " +
+            "(at least ${AccessPolicy.MIN_PASSWORD_LENGTH} characters), then reload this page.</p></div></body></html>"
+        return newFixedLengthResponse(Response.Status.FORBIDDEN, "text/html; charset=utf-8", html)
     }
 
     /**

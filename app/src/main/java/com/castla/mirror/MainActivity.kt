@@ -224,7 +224,7 @@ class MainActivity : AppCompatActivity() {
         networkMonitor = NetworkMonitor(this)
         networkMonitor.startMonitoring()
         streamSettings = StreamSettings.load(this)
-        tunnelAuthEnabled = com.castla.mirror.network.TunnelSecurityConfig.load(this).authEnabled
+        tunnelAuthEnabled = com.castla.mirror.network.TunnelSecurityConfig.run { passwordSet(load(this@MainActivity)) }
 
         shizukuInstalled = isShizukuInstalled()
         shizukuSetup = ShizukuSetup()
@@ -361,7 +361,7 @@ class MainActivity : AppCompatActivity() {
                         },
                         onBackClick = {
                             tunnelAuthEnabled =
-                                com.castla.mirror.network.TunnelSecurityConfig.load(this@MainActivity).authEnabled
+                                com.castla.mirror.network.TunnelSecurityConfig.run { passwordSet(load(this@MainActivity)) }
                             showSettings = false
                         }
                     )
@@ -1253,15 +1253,16 @@ fun CastlaScreen(
                                     color = Color(0xFF7CB3FF),
                                     textAlign = TextAlign.Center
                                 )
-                                if (tunnelAuthEnabled) {
-                                    Text(
-                                        text = stringResource(id = R.string.home_tunnel_password_protected),
-                                        fontSize = 13.sp,
-                                        color = Color.White.copy(alpha = 0.6f),
-                                        textAlign = TextAlign.Center,
-                                        modifier = Modifier.padding(top = 4.dp)
-                                    )
-                                }
+                                Text(
+                                    text = stringResource(
+                                        id = if (tunnelAuthEnabled) R.string.home_tunnel_password_protected
+                                        else R.string.home_tunnel_password_missing
+                                    ),
+                                    fontSize = 13.sp,
+                                    color = if (tunnelAuthEnabled) Color.White.copy(alpha = 0.6f) else Color(0xFFFF8A80),
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
                             } else if (cloudflareTunnelError != null) {
                                 Text(
                                     text = cloudflareTunnelError!!,
