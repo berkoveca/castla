@@ -641,6 +641,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
+    /**
+     * The video is hidden on launch/home until the next frame shows. The MSE
+     * decoder (used in the Tesla browser) signalled only its very first frame
+     * ever, so every later launch stayed black until the timeout — until split
+     * screen rebuilt the decoder. Re-arm it here.
+     */
+    function waitForNextFirstFrame() {
+        firstFrameReceived = false;
+        if (decoder && typeof decoder.firstFrameSignaled === 'boolean') decoder.firstFrameSignaled = false;
+    }
+
     function clearLaunchTimeout() {
         if (launchTimeout) {
             clearTimeout(launchTimeout);
@@ -1575,7 +1586,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         webLauncher.classList.add('hidden');
         splitDrawer.style.display = 'flex';
         homeBtn.style.display = 'block';
-        firstFrameReceived = false;
+        waitForNextFirstFrame();
         clearLaunchTimeout();
         clearFrameWatchdog();
 
@@ -1619,7 +1630,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             showLauncherNotice(stillQueued ? 'Phone not reachable. Try again.' : 'Launch timed out. Try again.');
             clientLog('launchTimeout', `${launchedPkg}: no first frame within 12000ms` +
                 ` sent=${!stillQueued} control=${controlSocket ? controlSocket.readyState : 'none'}` +
-                ` video=${videoSocket ? videoSocket.readyState : 'none'} recvFrames=${recvStats.frames}`);
+                ` video=${videoSocket ? videoSocket.readyState : 'none'} codec=${codecMode} recvFrames=${recvStats.frames}`);
         }, 12000);
     }
 
@@ -1669,7 +1680,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         homeBtn.style.display = 'none';
 
         hideOverlay();
-        firstFrameReceived = false;
+        waitForNextFirstFrame();
 
         currentPrimaryApp = null;
         if (controlSocket && controlSocket.readyState === WebSocket.OPEN) {
