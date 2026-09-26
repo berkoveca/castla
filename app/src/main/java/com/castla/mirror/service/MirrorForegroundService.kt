@@ -970,6 +970,7 @@ class MirrorForegroundService : Service() {
         healthHeartbeatJob = null
         CrashBreadcrumbs.markSession(this, active = false, reason = "ended:$effectiveReason")
         isCleanupInProgress = true
+        try { restoreScreenTimeout() } catch (_: Throwable) {}
 
         // Always restore physical display panel on cleanup — safety net
         if (screenOffPolicy.state == ScreenOffState.PANEL_OFF_ACTIVE ||
@@ -2751,6 +2752,7 @@ class MirrorForegroundService : Service() {
     }
 
     private fun goHomeFromCar() {
+        blankStreamDetector.rearm()
         Log.i(TAG, "Navigating to home requested by Web Launcher")
         FileLogger.i(TAG, "Go home from car: vd=${virtualDisplayManager?.getDisplayId()} app=$currentVdApp", durable = true)
         val previousApp = currentVdApp
@@ -2797,6 +2799,7 @@ class MirrorForegroundService : Service() {
     }
 
     private fun launchAppFromWebLauncher(pkgName: String, componentName: String? = null, splitMode: Boolean = false, pane: String = if (splitMode) "secondary" else "primary") {
+        if (pane != "secondary") blankStreamDetector.rearm()
         Log.i(TAG, "launchAppFromWebLauncher: pkg=$pkgName split=$splitMode pane=$pane singleVdSplit=$singleVdSplit")
         FileLogger.i(TAG, "App launch from car: pkg=$pkgName split=$splitMode pane=$pane")
         if (!splitMode) {
@@ -3169,6 +3172,7 @@ class MirrorForegroundService : Service() {
             cancelTunnelOrphanStop()
 
             acquireWakeLocks()
+            keepPhoneAwakeWhenReady()
 
             // Proactively watch thermal headroom so we back off before the device
             // reaches a framework thermal SHUTDOWN (instant power-off) / REBOOT.
@@ -3257,6 +3261,7 @@ class MirrorForegroundService : Service() {
         appliedLayoutMode = null
         Log.i(TAG, "Tearing down VD session: $reason")
         FileLogger.i(TAG, "Tearing down VD session: $reason")
+        restoreScreenTimeout()
         try { touchInjector?.setVirtualDisplayInjector(null) } catch (_: Exception) {}
         try { virtualDisplayManager?.release() } catch (e: Exception) { Log.w(TAG, "Failed to release virtual display manager", e) }
         virtualDisplayManager = null
@@ -3775,6 +3780,9 @@ class MirrorForegroundService : Service() {
                 // (small box in a corner of the car screen). See VdRebuildPolicy.
                 val forceRecreate = forceVdRecreate
                 forceVdRecreate = false
+                // Black-screen timing restarts with every display rebuild (split on/off,
+                // resize, recovery): keyframes from the old display are not evidence.
+                blankStreamDetector.reset()
                 val vdAction = com.castla.mirror.policy.VdRebuildPolicy.decide(
                     virtualDisplayManager?.hasVirtualDisplay() == true,
                     currentWidth, currentHeight, width, height,
@@ -3947,6 +3955,65 @@ class MirrorForegroundService : Service() {
         mirrorServer?.setKeyframeRequester(channel) { encoder.requestKeyFrame() }
     }
 
+    private val screenTimeoutPrefs by lazy { getSharedPreferences("castla_screen_timeout", MODE_PRIVATE) }
+    private var keepAwakeJob: Job? = null
+
+    /**
+     * While the car is mirroring, the phone must not sleep: each screen timeout
+     * slept the phone, woke it on the lock screen and could leave the car picture
+     * black. Sets a very long screen-off timeout via Shizuku (see ScreenTimeoutPolicy);
+     * waits for the privileged service, which binds shortly after the browser connects.
+     */
+    private fun keepPhoneAwakeWhenReady() {
+        keepAwakeJob?.cancel()
+        keepAwakeJob = serviceScope.launch {
+            repeat(30) {
+                val svc = virtualDisplayManager?.getPrivilegedService()
+                if (svc != null) {
+                    applyKeepAwake(svc)
+                    return@launch
+                }
+                kotlinx.coroutines.delay(1_000)
+            }
+            FileLogger.w(TAG, "Keep-awake not applied: Shizuku service not available")
+        }
+    }
+
+    private fun applyKeepAwake(svc: com.castla.mirror.shizuku.IPrivilegedService) {
+        try {
+            val policy = com.castla.mirror.policy.ScreenTimeoutPolicy
+            val current = policy.parse(svc.execCommand("settings get system screen_off_timeout"))
+            val saved = if (screenTimeoutPrefs.contains("saved")) screenTimeoutPrefs.getLong("saved", 0L) else null
+            policy.valueToSave(current, saved)?.let { screenTimeoutPrefs.edit().putLong("saved", it).commit() }
+            if (current != policy.KEEP_AWAKE_MS) {
+                svc.execCommand("settings put system screen_off_timeout ${policy.KEEP_AWAKE_MS}")
+            }
+            FileLogger.i(TAG, "Phone kept awake while mirroring: screen timeout ${current ?: "?"}ms -> ${policy.KEEP_AWAKE_MS}ms (saved=${saved ?: current})")
+        } catch (t: Throwable) {
+            FileLogger.w(TAG, "Keep-awake failed: ${t.javaClass.simpleName}: ${t.message}")
+        }
+    }
+
+    /** Puts the user's own screen timeout back (session end, cleanup). */
+    private fun restoreScreenTimeout() {
+        keepAwakeJob?.cancel()
+        keepAwakeJob = null
+        val svc = virtualDisplayManager?.getPrivilegedService() ?: return
+        try {
+            val policy = com.castla.mirror.policy.ScreenTimeoutPolicy
+            val saved = if (screenTimeoutPrefs.contains("saved")) screenTimeoutPrefs.getLong("saved", 0L) else null
+            val current = policy.parse(svc.execCommand("settings get system screen_off_timeout"))
+            val restore = policy.valueToRestore(saved, current)
+            if (restore != null) {
+                svc.execCommand("settings put system screen_off_timeout $restore")
+                FileLogger.i(TAG, "Screen timeout restored: ${current ?: "?"}ms -> ${restore}ms")
+            }
+            screenTimeoutPrefs.edit().remove("saved").commit()
+        } catch (t: Throwable) {
+            FileLogger.w(TAG, "Screen timeout restore failed: ${t.javaClass.simpleName}: ${t.message}")
+        }
+    }
+
     /** Set to make the next pipeline rebuild recreate the VD even at the same size. */
     @Volatile private var forceVdRecreate = false
     private val blankStreamDetector = com.castla.mirror.policy.BlankStreamDetector()
@@ -3960,7 +4027,7 @@ class MirrorForegroundService : Service() {
      */
     private fun checkForBlankDisplay(keyFrameBytes: Int) {
         val app = currentVdApp
-        val appShown = app.isNotBlank() && app != "HOME" && !hasActiveSplitSession()
+        val appShown = app.isNotBlank() && app != "HOME" && !hasActiveSplitSession() && secondaryDisplayId < 0
         if (!blankStreamDetector.onKeyFrame(keyFrameBytes, android.os.SystemClock.elapsedRealtime(), appShown)) return
         if (blankRecoveryJob?.isActive == true || !browserConnected || isCleanupInProgress) return
         blankRecoveryJob = serviceScope.launch {
