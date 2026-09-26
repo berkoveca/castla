@@ -45,7 +45,7 @@
     <!-- Settings Screen -->
     <string name="settings_back">Back</string>
     <string name="settings_title">Settings</string>
-    <string name="settings_stop_streaming_warning">Stop streaming to change settings</string>
+    <string name="settings_stop_streaming_warning">Resolution, frame rate, video mode and keep-awake apply live. Other settings: stop streaming first.</string>
     <string name="thermal_warning_light">Device is warm — quality slightly reduced</string>
     <string name="thermal_warning_moderate">Device is getting hot — quality reduced to prevent overheating</string>
     <string name="thermal_warning_critical">Device is very hot — quality heavily reduced</string>
@@ -57,6 +57,9 @@
     <string name="settings_stream_webcodecs">WebCodecs (H.264)</string>
     <string name="settings_stream_mjpeg">MJPEG</string>
     <string name="settings_stream_mse">MSE H.264</string>
+    <string name="settings_keep_awake_title">Phone while mirroring</string>
+    <string name="settings_keep_awake">Keep phone awake</string>
+    <string name="settings_keep_awake_description">The phone never sleeps or locks while the car is connected (a lock could leave the car screen black). Your screen timeout comes back when the car disconnects. Also in the car menu.</string>
     <string name="settings_audio_experimental">Audio (Experimental)</string>
     <string name="settings_stream_device_audio">Stream device audio</string>
     <string name="settings_audio_description">Requires Android 10+. Captures system output.</string>

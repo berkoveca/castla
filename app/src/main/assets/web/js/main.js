@@ -128,6 +128,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     const densityBtn = document.getElementById('density-btn');
     const densityLabel = document.getElementById('density-label');
     const densityPopup = document.getElementById('density-popup');
+    const refreshBtn = document.getElementById('refresh-btn');
+    const qualityBtn = document.getElementById('quality-btn');
+    const qualityPopup = document.getElementById('quality-popup');
+    // Declared up front: settingsState messages can arrive before the menu code below runs.
+    let qualityState = null;
+    const QUALITY_ROWS = [
+        { key: 'resolution', title: 'Resolution', options: [
+            ['AUTO', 'Auto'], ['RES_720', '720'], ['RES_800', '800'], ['RES_960', '960'],
+            ['RES_1080', '1080'], ['RES_1200', '1200']] },
+        { key: 'fps', title: 'Frame rate', options: [[0, 'Auto'], [30, '30'], [60, '60']] },
+        { key: 'mode', title: 'Video mode', hint: 'Auto is recommended for Tesla (hardware video)',
+          options: [['AUTO', 'Auto'], ['MSE', 'Hardware video'], ['WEBCODECS', 'WebCodecs'], ['MJPEG', 'MJPEG']] },
+        { key: 'keepAwake', title: 'Keep phone awake', hint: 'Phone never sleeps or locks while connected',
+          options: [[true, 'On'], [false, 'Off']] },
+    ];
     const overlay = document.getElementById('overlay');
     const statusText = document.getElementById('status');
     const launcherLoading = document.getElementById('launcher-loading');
@@ -1373,6 +1388,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                     ottProfileActive = !!msg.active;
                     refreshEffectiveProfile();
                     console.log(`[Profile] OTT hint: active=${ottProfileActive}`);
+                } else if (msg.type === 'settingsState') {
+                    qualityState = msg;
+                    buildQualityPopup();
+                } else if (msg.type === 'reloadPage') {
+                    // Video mode changed: the decoder is chosen at page load.
+                    showAutoTierToast('Switching video mode…');
+                    setTimeout(() => location.reload(), 600);
                 } else if (msg.type === 'streamingMode') {
                     serverStreamingMode = msg.mode;
                 } else if (msg.type === 'streamCodec') {
@@ -1947,6 +1969,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (overlayMenuToggle) overlayMenuToggle.setAttribute('aria-expanded', 'false');
         if (densityPopup) densityPopup.style.display = 'none';
         if (profilePopup) profilePopup.style.display = 'none';
+        if (qualityPopup) qualityPopup.style.display = 'none';
     }
 
     function updateOverlayControlsVisibility() {
@@ -2096,6 +2119,90 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
         document.addEventListener('click', () => {
             if (densityPopup) densityPopup.style.display = 'none';
+        });
+    }
+
+    // ── Refresh + Quality menu ──
+    // Refresh: the phone recreates its virtual display + video and relaunches the
+    // app (what split screen used to fix). Quality: resolution / frame rate /
+    // video mode / keep phone awake — applied live, same settings as the phone app.
+
+    function sendQuality(key, value) {
+        if (!controlSocket || controlSocket.readyState !== WebSocket.OPEN) {
+            showAutoTierToast('Not connected to the phone');
+            return;
+        }
+        const msg = { type: 'setQuality' };
+        msg[key] = value;
+        controlSocket.send(JSON.stringify(msg));
+        if (qualityState) { qualityState[key] = value; buildQualityPopup(); }
+        showAutoTierToast(key === 'mode' ? 'Switching video mode…' : 'Applying…');
+    }
+
+    function buildQualityPopup() {
+        if (!qualityPopup) return;
+        qualityPopup.innerHTML = '';
+        const summary = document.createElement('div');
+        summary.textContent = qualityState && qualityState.summary ? qualityState.summary : 'Waiting for the phone…';
+        summary.style.cssText = 'color:#fff;font-size:13px;font-weight:600;margin:0 2px 10px;line-height:1.35;';
+        qualityPopup.appendChild(summary);
+        QUALITY_ROWS.forEach(row => {
+            const title = document.createElement('div');
+            title.textContent = row.title;
+            title.style.cssText = 'color:#9aa;font-size:12px;margin:8px 2px 6px;';
+            qualityPopup.appendChild(title);
+            const chips = document.createElement('div');
+            chips.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;';
+            row.options.forEach(([value, label]) => {
+                const active = qualityState && qualityState[row.key] === value;
+                const btn = document.createElement('button');
+                btn.textContent = label;
+                btn.style.cssText = `min-height:40px;padding:0 14px;border-radius:20px;cursor:pointer;
+                    border:1px solid ${active ? '#64B5F6' : 'rgba(255,255,255,0.15)'};
+                    background:${active ? 'rgba(100,181,246,0.25)' : 'transparent'};
+                    color:${active ? '#64B5F6' : '#ddd'};font-size:14px;font-weight:${active ? '600' : '400'};
+                    font-family:inherit;`;
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    if (!active) sendQuality(row.key, value);
+                });
+                chips.appendChild(btn);
+            });
+            qualityPopup.appendChild(chips);
+            if (row.hint) {
+                const hint = document.createElement('div');
+                hint.textContent = row.hint;
+                hint.style.cssText = 'color:#778;font-size:11px;margin:4px 2px 0;';
+                qualityPopup.appendChild(hint);
+            }
+        });
+    }
+
+    if (qualityBtn && qualityPopup) {
+        buildQualityPopup();
+        qualityPopup.addEventListener('click', (e) => e.stopPropagation());
+        qualityBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isVisible = qualityPopup.style.display === 'block';
+            if (densityPopup) densityPopup.style.display = 'none';
+            if (profilePopup) profilePopup.style.display = 'none';
+            buildQualityPopup();
+            qualityPopup.style.display = isVisible ? 'none' : 'block';
+        });
+        document.addEventListener('click', () => { qualityPopup.style.display = 'none'; });
+    }
+
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (!controlSocket || controlSocket.readyState !== WebSocket.OPEN) {
+                showAutoTierToast('Not connected to the phone');
+                return;
+            }
+            controlSocket.send(JSON.stringify({ type: 'refresh' }));
+            clientLog('refresh', 'user tapped Refresh');
+            showAutoTierToast('Refreshing picture…');
+            collapseOverlayMenu();
         });
     }
 

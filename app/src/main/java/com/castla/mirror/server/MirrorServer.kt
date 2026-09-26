@@ -165,6 +165,18 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         onCloseSplitListener = listener
     }
 
+    private var onRefreshListener: (() -> Unit)? = null
+    private var onQualityListener: ((String?, Int?, String?, Boolean?) -> Unit)? = null
+
+    fun setRefreshListener(listener: () -> Unit) { onRefreshListener = listener }
+    fun setQualityListener(listener: (resolution: String?, fps: Int?, mode: String?, keepAwake: Boolean?) -> Unit) {
+        onQualityListener = listener
+    }
+    fun onRefreshRequest() { onRefreshListener?.invoke() }
+    fun onQualityRequest(resolution: String?, fps: Int?, mode: String?, keepAwake: Boolean?) {
+        onQualityListener?.invoke(resolution, fps, mode, keepAwake)
+    }
+
     fun setDisplayDensityListener(listener: (Float) -> Unit) {
         onDisplayDensityListener = listener
     }

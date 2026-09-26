@@ -68,6 +68,13 @@ class StreamSettingsTest {
     }
 
     @Test
+    fun `keep awake defaults on and round-trips off`() {
+        assertTrue(StreamSettings.load(context).keepAwake)
+        StreamSettings.save(context, StreamSettings(keepAwake = false))
+        assertFalse(StreamSettings.load(context).keepAwake)
+    }
+
+    @Test
     fun `load handles corrupted resolution gracefully`() {
         context.getSharedPreferences("castla_settings", Context.MODE_PRIVATE)
             .edit().putString("max_resolution", "INVALID_RES").commit()

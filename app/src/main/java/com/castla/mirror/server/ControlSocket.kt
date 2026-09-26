@@ -21,7 +21,7 @@ class ControlSocket(
         private const val TAG = "ControlSocket"
         private val QUIET_TYPES = setOf("touch", "qualityReport", "ka", "textInput", "compositionUpdate", "log", "clientEvent")
         private val PRIVATE_KEYS = setOf("text", "value", "password")
-        private val RISKY_TYPES = setOf("launchApp", "goHome", "closeSecondary", "closeSplit", "displayDensity", "viewport", "codec")
+        private val RISKY_TYPES = setOf("launchApp", "goHome", "refresh", "setQuality", "closeSecondary", "closeSplit", "displayDensity", "viewport", "codec")
     }
 
     override fun onOpen() {
@@ -134,6 +134,17 @@ class ControlSocket(
                 }
                 "closeSplit" -> {
                     server.onCloseSplitRequest()
+                }
+                "refresh" -> {
+                    server.onRefreshRequest()
+                }
+                "setQuality" -> {
+                    server.onQualityRequest(
+                        resolution = json.optString("resolution", "").takeIf { it.isNotEmpty() },
+                        fps = if (json.has("fps")) json.optInt("fps", -1) else null,
+                        mode = json.optString("mode", "").takeIf { it.isNotEmpty() },
+                        keepAwake = if (json.has("keepAwake")) json.optBoolean("keepAwake") else null
+                    )
                 }
                 "displayDensity" -> {
                     val scale = json.optDouble("scale", 1.0).toFloat()

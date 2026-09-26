@@ -22,7 +22,9 @@ data class StreamSettings(
     val mirroringMode: MirroringMode = MirroringMode.FULL_SCREEN,
     val targetAppPackage: String = "",
     val targetAppLabel: String = "",
-    val streamingMode: StreamingMode = StreamingMode.AUTO
+    val streamingMode: StreamingMode = StreamingMode.AUTO,
+    /** Keep the phone awake (never sleep/lock) while the car is mirroring. */
+    val keepAwake: Boolean = true
 ) {
     enum class Resolution(val maxHeight: Int, val label: String) {
         AUTO(720, "Auto"),
@@ -48,6 +50,10 @@ data class StreamSettings(
         private const val KEY_TARGET_APP_PACKAGE = "target_app_package"
         private const val KEY_TARGET_APP_LABEL = "target_app_label"
         private const val KEY_STREAMING_MODE = "streaming_mode"
+        const val KEY_KEEP_AWAKE = "keep_awake"
+        /** Keys whose change the running service applies live. */
+        val LIVE_KEYS = setOf(KEY_RESOLUTION, KEY_FPS, KEY_STREAMING_MODE, KEY_KEEP_AWAKE)
+        const val PREFS = PREFS_NAME
 
         /** Sentinel value indicating auto FPS mode. Must not collide with real FPS values. */
         const val FPS_AUTO = 0
@@ -73,7 +79,8 @@ data class StreamSettings(
                 targetAppLabel = prefs.getString(KEY_TARGET_APP_LABEL, "") ?: "",
                 streamingMode = try {
                     StreamingMode.valueOf(prefs.getString(KEY_STREAMING_MODE, StreamingMode.AUTO.name)!!)
-                } catch (_: Exception) { StreamingMode.AUTO }
+                } catch (_: Exception) { StreamingMode.AUTO },
+                keepAwake = prefs.getBoolean(KEY_KEEP_AWAKE, true)
             )
         }
 
@@ -86,6 +93,7 @@ data class StreamSettings(
                 .putString(KEY_TARGET_APP_PACKAGE, settings.targetAppPackage)
                 .putString(KEY_TARGET_APP_LABEL, settings.targetAppLabel)
                 .putString(KEY_STREAMING_MODE, settings.streamingMode.name)
+                .putBoolean(KEY_KEEP_AWAKE, settings.keepAwake)
                 .apply()
         }
     }

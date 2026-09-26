@@ -793,6 +793,8 @@ class MirrorForegroundService : Service() {
         val settingsFps = if (autoFps) 30 else rawFps
 
         Log.i(TAG, "Mode: autoRes=$autoResolution autoFps=$autoFps initialMaxHeight=$currentMaxHeight initialFps=$settingsFps")
+        appliedChoice = choiceFromSettings(com.castla.mirror.ui.StreamSettings.load(this))
+        registerLiveSettingsListener()
         val audioEnabled = intent.getBooleanExtra(EXTRA_AUDIO, false)
         mirroringMode = intent.getStringExtra(EXTRA_MIRRORING_MODE) ?: "FULL_SCREEN"
         targetPackage = intent.getStringExtra(EXTRA_TARGET_PACKAGE) ?: ""
@@ -1466,6 +1468,12 @@ class MirrorForegroundService : Service() {
                     carRequests.submit(key, CarRequest(pkgName.ifBlank { "close-$pane" }) {
                         launchAppFromWebLauncher(pkgName, componentName, splitMode, pane)
                     })
+                }
+                server.setRefreshListener {
+                    carRequests.submit("primary", CarRequest("REFRESH") { refreshFromCar() })
+                }
+                server.setQualityListener { resolution, fps, mode, keepAwake ->
+                    saveQualityFromCar(resolution, fps, mode, keepAwake)
                 }
                 server.setCloseSplitListener {
                     Log.i(TAG, "Close split requested — restoring primary fullscreen")
@@ -3192,6 +3200,7 @@ class MirrorForegroundService : Service() {
                     put("mode", configuredMode.name.lowercase())
                 }.toString()
             )
+            broadcastSettingsState()
 
             if (videoEncoder != null || jpegEncoder != null) {
                 // Reconnection — rebuild existing pipeline and restart audio.
@@ -3865,6 +3874,7 @@ class MirrorForegroundService : Service() {
                 put("height", height)
             }
             mirrorServer?.broadcastControlMessage(msg.toString())
+            broadcastSettingsState()
 
         } catch (e: Throwable) {
             Log.e(TAG, "Failed to rebuild pipeline", e)
@@ -3955,6 +3965,130 @@ class MirrorForegroundService : Service() {
         mirrorServer?.setKeyframeRequester(channel) { encoder.requestKeyFrame() }
     }
 
+    // ── Live quality / keep-awake settings (car menu + phone app) ──
+
+    /** The choice the running pipeline was last set up for. */
+    @Volatile private var appliedChoice: com.castla.mirror.policy.QualityChoicePolicy.Choice? = null
+    private var liveSettingsJob: Job? = null
+    /** Strong ref: SharedPreferences holds listeners weakly. */
+    private val liveSettingsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == null || key in com.castla.mirror.ui.StreamSettings.LIVE_KEYS) {
+            // Debounced: one save writes several keys.
+            liveSettingsJob?.cancel()
+            liveSettingsJob = serviceScope.launch {
+                kotlinx.coroutines.delay(250)
+                applyLiveSettings()
+            }
+        }
+    }
+
+    private fun registerLiveSettingsListener() {
+        try {
+            val prefs = getSharedPreferences(com.castla.mirror.ui.StreamSettings.PREFS, MODE_PRIVATE)
+            prefs.unregisterOnSharedPreferenceChangeListener(liveSettingsListener)
+            prefs.registerOnSharedPreferenceChangeListener(liveSettingsListener)
+        } catch (t: Throwable) {
+            FileLogger.w(TAG, "live settings listener failed: ${t.javaClass.simpleName}")
+        }
+    }
+
+    private fun choiceFromSettings(s: com.castla.mirror.ui.StreamSettings) =
+        com.castla.mirror.policy.QualityChoicePolicy.Choice(
+            resolution = s.maxResolution.name, fps = s.fps, mode = s.streamingMode.name, keepAwake = s.keepAwake
+        )
+
+    /** Car menu → saved settings (the phone app shows them too); applied by [applyLiveSettings]. */
+    private fun saveQualityFromCar(resolution: String?, fps: Int?, mode: String?, keepAwake: Boolean?) {
+        val settings = com.castla.mirror.ui.StreamSettings.load(this)
+        val merged = com.castla.mirror.policy.QualityChoicePolicy.merge(
+            choiceFromSettings(settings), resolution, fps, mode, keepAwake
+        )
+        FileLogger.i(TAG, "Quality from car: res=${merged.resolution} fps=${merged.fps} mode=${merged.mode} keepAwake=${merged.keepAwake}", durable = true)
+        val updated = settings.copy(
+            maxResolution = com.castla.mirror.ui.StreamSettings.Resolution.valueOf(merged.resolution),
+            fps = merged.fps,
+            streamingMode = com.castla.mirror.ui.StreamingMode.valueOf(merged.mode),
+            keepAwake = merged.keepAwake
+        )
+        if (updated == settings) {
+            broadcastSettingsState() // nothing changed: just re-sync the menu
+        } else {
+            // Applied once, by the preferences listener (same path as a change in the phone app).
+            com.castla.mirror.ui.StreamSettings.save(this, updated)
+        }
+    }
+
+    /** Applies saved quality / keep-awake settings to the running session. */
+    private suspend fun applyLiveSettings() {
+        val new = choiceFromSettings(com.castla.mirror.ui.StreamSettings.load(this))
+        val old = appliedChoice ?: new
+        appliedChoice = new
+        val change = com.castla.mirror.policy.QualityChoicePolicy.diff(old, new)
+        if (change.rebuild) {
+            autoResolution = new.resolution == "AUTO"
+            currentMaxHeight = com.castla.mirror.policy.QualityChoicePolicy.maxShortSide(new.resolution)
+                ?: AUTO_START_MAX_SHORT_SIDE
+            autoFps = new.fps == com.castla.mirror.ui.StreamSettings.FPS_AUTO
+            currentFps = if (autoFps) AUTO_TIERS[autoTierIndex.coerceIn(0, AUTO_TIERS.lastIndex)].fps else new.fps
+            if (autoResolution || autoFps) {
+                if (autoScaleJob?.isActive != true && browserConnected) startAutoScaleLoop()
+            } else {
+                autoScaleJob?.cancel()
+            }
+            FileLogger.i(TAG, "Quality applied live: maxShortSide=$currentMaxHeight (auto=$autoResolution) fps=$currentFps (auto=$autoFps)", durable = true)
+            if (browserConnected && currentWidth > 0 && currentHeight > 0) rebuildForCurrentViewport()
+        }
+        if (change.reloadPage) {
+            FileLogger.i(TAG, "Video mode changed to ${new.mode} — car page reloads to switch decoder", durable = true)
+            mirrorServer?.broadcastControlMessage(JSONObject().apply {
+                put("type", "streamingMode"); put("mode", new.mode.lowercase())
+            }.toString())
+            mirrorServer?.broadcastControlMessage(JSONObject().apply { put("type", "reloadPage") }.toString())
+        }
+        if (change.keepAwakeChanged) {
+            if (new.keepAwake && browserConnected) keepPhoneAwakeWhenReady() else if (!new.keepAwake) restoreScreenTimeout()
+        }
+        broadcastSettingsState()
+    }
+
+    /** Current choice + what is really running, for the car menu. */
+    private fun broadcastSettingsState() {
+        try {
+            val choice = appliedChoice ?: choiceFromSettings(com.castla.mirror.ui.StreamSettings.load(this))
+            val fps = thermalFpsOverride ?: currentFps
+            val limited = thermalMaxHeight != null || thermalFpsOverride != null
+            val summary = com.castla.mirror.policy.QualityChoicePolicy.summary(
+                choice, currentWidth, currentHeight, fps, currentCodecMode, limited
+            )
+            mirrorServer?.broadcastControlMessage(JSONObject().apply {
+                put("type", "settingsState")
+                put("resolution", choice.resolution)
+                put("fps", choice.fps)
+                put("mode", choice.mode)
+                put("keepAwake", choice.keepAwake)
+                put("summary", summary)
+            }.toString())
+        } catch (t: Throwable) {
+            Log.w(TAG, "settingsState broadcast failed", t)
+        }
+    }
+
+    /**
+     * Refresh from the car: what split screen used to fix — recreate the virtual
+     * display and encoder at the current size and relaunch the app.
+     */
+    private fun refreshFromCar() {
+        FileLogger.i(TAG, "Refresh from car: recreating display (app=$currentVdApp)", durable = true)
+        blankStreamDetector.rearm()
+        if (!browserConnected || isCleanupInProgress) return
+        forceVdRecreate = true
+        try {
+            kotlinx.coroutines.runBlocking { rebuildForCurrentViewport() }
+        } finally {
+            forceVdRecreate = false
+        }
+    }
+
     private val screenTimeoutPrefs by lazy { getSharedPreferences("castla_screen_timeout", MODE_PRIVATE) }
     private var keepAwakeJob: Job? = null
 
@@ -3966,6 +4100,10 @@ class MirrorForegroundService : Service() {
      */
     private fun keepPhoneAwakeWhenReady() {
         keepAwakeJob?.cancel()
+        if (!com.castla.mirror.ui.StreamSettings.load(this).keepAwake) {
+            FileLogger.i(TAG, "Keep phone awake: Off (phone follows its own screen timeout)")
+            return
+        }
         keepAwakeJob = serviceScope.launch {
             repeat(30) {
                 val svc = virtualDisplayManager?.getPrivilegedService()
@@ -4123,6 +4261,10 @@ class MirrorForegroundService : Service() {
         // Thermal listener removal is handled inside performCleanup — do NOT
         // remove it here to avoid "Listener was not added" IllegalArgumentException.
         performCleanup("onDestroy") // no-ops if already completed (guard inside)
+        try {
+            getSharedPreferences(com.castla.mirror.ui.StreamSettings.PREFS, MODE_PRIVATE)
+                .unregisterOnSharedPreferenceChangeListener(liveSettingsListener)
+        } catch (_: Throwable) {}
         MirrorWidgetProvider.updateAllWidgets(this)
         super.onDestroy()
     }

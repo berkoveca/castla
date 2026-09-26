@@ -751,6 +751,50 @@
                     </div>
                 </div>
 
+                <!-- Refresh: recreate the phone's display + video (what split screen used to fix) -->
+                <button id="refresh-btn" title="Refresh picture"
+                        style="height:48px;padding:0 14px;border-radius:24px;border:none;
+                                   background:rgba(0,0,0,0.6);color:#fff;font-size:13px;
+                                   font-weight:500;cursor:pointer;backdrop-filter:blur(4px);
+                                   box-shadow:0 4px 6px rgba(0,0,0,0.3);
+                                   font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+                                   white-space:nowrap;display:flex;align-items:center;gap:6px;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="23 4 23 10 17 10"/>
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                    </svg>
+                    <span>Refresh</span>
+                </button>
+
+                <!-- Quality: resolution / frame rate / video mode / keep phone awake -->
+                <div id="quality-control" style="position:relative;">
+                    <button id="quality-btn" title="Quality"
+                            style="height:48px;padding:0 14px;border-radius:24px;border:none;
+                                   background:rgba(0,0,0,0.6);color:#fff;font-size:13px;
+                                   font-weight:500;cursor:pointer;backdrop-filter:blur(4px);
+                                   box-shadow:0 4px 6px rgba(0,0,0,0.3);
+                                   font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+                                   white-space:nowrap;display:flex;align-items:center;gap:6px;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>
+                            <line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>
+                            <line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>
+                            <line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/>
+                            <line x1="17" y1="16" x2="23" y2="16"/>
+                        </svg>
+                        <span>Quality</span>
+                    </button>
+                    <div id="quality-popup"
+                         style="position:absolute;bottom:56px;left:0;
+                                background:rgba(20,20,30,0.95);backdrop-filter:blur(10px);
+                                border-radius:12px;padding:12px;display:none;
+                                box-shadow:0 8px 24px rgba(0,0,0,0.5);
+                                border:1px solid rgba(255,255,255,0.1);
+                                width:min(440px, calc(100vw - 40px));max-height:70vh;overflow-y:auto;
+                                font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+                    </div>
+                </div>
+
                 <!-- Playback Profile Control (relocated inside #overlay-menu-panel) -->
                 <div id="playback-profile-control" style="position:relative;">
                     <button id="playback-profile-btn"

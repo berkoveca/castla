@@ -472,9 +472,9 @@ fun SettingsScreen(
                             text = localizedLabel,
                             selected = settings.maxResolution == res,
                             onClick = {
-                                if (!isStreaming) onSettingsChanged(settings.copy(maxResolution = res))
+                                onSettingsChanged(settings.copy(maxResolution = res))
                             },
-                            enabled = !isStreaming
+                            enabled = true
                         )
                     }
                 }
@@ -500,9 +500,9 @@ fun SettingsScreen(
                             text = localizedLabel,
                             selected = settings.streamingMode == mode,
                             onClick = {
-                                if (!isStreaming) onSettingsChanged(settings.copy(streamingMode = mode))
+                                onSettingsChanged(settings.copy(streamingMode = mode))
                             },
-                            enabled = !isStreaming
+                            enabled = true
                         )
                     }
                 }
@@ -527,11 +527,48 @@ fun SettingsScreen(
                             text = label,
                             selected = settings.fps == fps,
                             onClick = {
-                                if (!isStreaming) onSettingsChanged(settings.copy(fps = fps))
+                                onSettingsChanged(settings.copy(fps = fps))
                             },
-                            enabled = !isStreaming
+                            enabled = true
                         )
                     }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Keep phone awake while mirroring (also switchable from the car menu)
+            SettingSection(title = stringResource(R.string.settings_keep_awake_title)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.settings_keep_awake),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = Color.White,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.settings_keep_awake_description),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White.copy(alpha = 0.6f)
+                        )
+                    }
+                    Switch(
+                        checked = settings.keepAwake,
+                        onCheckedChange = { enabled -> onSettingsChanged(settings.copy(keepAwake = enabled)) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = Color(0xFF2979FF),
+                            uncheckedThumbColor = Color.White.copy(alpha = 0.7f),
+                            uncheckedTrackColor = Color.White.copy(alpha = 0.2f),
+                            uncheckedBorderColor = Color.Transparent
+                        )
+                    )
                 }
             }
 
