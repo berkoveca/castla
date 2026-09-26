@@ -230,3 +230,21 @@ followed a few ms later by VD 25's release for a resize.
 display release; HOME to a display that is not live is dropped, and a release of a display
 that just got HOME waits 1 s (`HomeKeyGuard`, unit-tested). Post-mortem now also captures
 `system_server_wtf` and `SYSTEM_RESTART` bodies.
+
+## Reading a diagnostic report after a soft reboot
+
+| Line prefix | Source | What to look for |
+|---|---|---|
+| `SysCall: → #n …` / `← #n … Xms` | every call into system_server via Shizuku | the last `→` with no `←` is the call in flight when system_server died; `SLOW` = system_server busy; `✗` = the call threw |
+| `SysCall: touch DOWN/UP/MOVE` | injected input (system_server input dispatcher) | gesture in progress at the crash |
+| `SysEvent: display added/removed/changed` | DisplayManager as system_server reports it | our VD removed without a Castla release; state flips |
+| `SysEvent: main thread blocked` | app watchdog | overload, or a binder call stuck in system_server |
+| `Health: … stream[…] … load=… appCpu=…` | 15 s heartbeat while mirroring | trends: load avg vs ~8 cores, CPU, threads/fds growth, fps/kbps, `maxSend` (network backpressure) |
+| `Page: car→ …` | control messages from the car page | the driver's last actions |
+| `client: …` (W) | page-side failures | decoder errors, stalls, reconnects, launch timeouts, JS errors |
+| `VideoEncoder:` | MediaCodec | codec name, negotiated profile/level, codec errors |
+| Post-mortem: `latest native crash`, `Android crash log` | DropBox + `logcat -b crash` | thread name, abort message and backtrace of a system_server SIGABRT |
+
+Overload vs. bug: an overloaded/hung system_server is killed by its Watchdog (`system_server_watchdog`
+in DropBox, `Watchdog` lines in the crash/system log). A `SIGABRT` with an abort message is a
+deliberate abort on a failed check — a bug path, usually triggered by the last system call.
