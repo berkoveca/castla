@@ -621,6 +621,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     let firstFrameReceived = false;
     let launchTimeout = null;
+    let pendingLaunch = null;
     let composing = false;
     let skipNextInput = false;
 
@@ -1258,6 +1259,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 controlSocket.send(JSON.stringify({ type: 'displayDensity', scale: currentDensity }));
             }
 
+            if (pendingLaunch && !isLauncherMode) {
+                clientLog('launchQueued', `${pendingLaunch.pkg}: sent after reconnect`);
+                sendPendingLaunch();
+            }
+
             if (isLauncherMode) {
                 loadLauncherApps();
             }
@@ -1577,47 +1583,58 @@ document.addEventListener('DOMContentLoaded', async () => {
         // flash during the transition to the new app
         clearCanvas();
 
+        const message = { type: 'launchApp', pkg: pkgName, splitMode: false };
+        if (componentName) message.componentName = componentName;
+        // Only the newest tap matters: a tap made while the connection is down is
+        // sent as soon as it is back (it used to be dropped, leaving a black screen).
+        pendingLaunch = message;
         setTimeout(() => {
-            if (controlSocket && controlSocket.readyState === WebSocket.OPEN) {
-                const message = {
-                    type: 'launchApp',
-                    pkg: pkgName,
-                    splitMode: false
-                };
-                if (componentName) message.componentName = componentName;
-
-                controlSocket.send(JSON.stringify(message));
-
-                if (codecMode === 'mjpeg') {
-                    controlSocket.send(JSON.stringify({ type: 'codec', mode: 'mjpeg' }));
-                }
-
-                sendViewportSize();
-                setStatus('Loading...', '');
-                showOverlay();
-                // Over LTE + tunnel the first keyframe of a freshly launched app can
-                // take several seconds. Nudge the phone for one at 3 s and only give
-                // up (back to the app grid) after 12 s — 5 s bounced users out of
-                // apps that were in fact starting.
-                setTimeout(() => {
-                    if (firstFrameReceived || isLauncherMode) return;
-                    try {
-                        if (videoSocket && videoSocket.readyState === WebSocket.OPEN) videoSocket.send('requestKeyframe');
-                    } catch (_) {}
-                }, 3000);
-                launchTimeout = setTimeout(() => {
-                    if (firstFrameReceived) return;
-                    closeInputBubble(true);
-                    isLauncherMode = true;
-                    webLauncher.classList.remove('hidden');
-                    splitDrawer.style.display = 'none';
-                    homeBtn.style.display = 'none';
-                    hideOverlay();
-                    showLauncherNotice('Launch timed out. Try again.');
-                    clientLog('launchTimeout', 'no first frame within 12000ms');
-                }, 12000);
+            if (!sendPendingLaunch()) {
+                setStatus('Reconnecting...', '');
+                clientLog('launchQueued', `${pkgName}: control connection not open, will send on reconnect`);
             }
         }, 50);
+        setStatus('Loading...', '');
+        showOverlay();
+        // Over LTE + tunnel the first keyframe of a freshly launched app can
+        // take several seconds. Nudge the phone for one at 3 s and only give
+        // up (back to the app grid) after 12 s.
+        const launchedPkg = pkgName;
+        setTimeout(() => {
+            if (firstFrameReceived || isLauncherMode) return;
+            try {
+                if (videoSocket && videoSocket.readyState === WebSocket.OPEN) videoSocket.send('requestKeyframe');
+            } catch (_) {}
+        }, 3000);
+        launchTimeout = setTimeout(() => {
+            if (firstFrameReceived) return;
+            const stillQueued = pendingLaunch && pendingLaunch.pkg === launchedPkg;
+            pendingLaunch = null;
+            closeInputBubble(true);
+            isLauncherMode = true;
+            webLauncher.classList.remove('hidden');
+            splitDrawer.style.display = 'none';
+            homeBtn.style.display = 'none';
+            hideOverlay();
+            showLauncherNotice(stillQueued ? 'Phone not reachable. Try again.' : 'Launch timed out. Try again.');
+            clientLog('launchTimeout', `${launchedPkg}: no first frame within 12000ms` +
+                ` sent=${!stillQueued} control=${controlSocket ? controlSocket.readyState : 'none'}` +
+                ` video=${videoSocket ? videoSocket.readyState : 'none'} recvFrames=${recvStats.frames}`);
+        }, 12000);
+    }
+
+    /** Sends the queued launch if the control connection is open. */
+    function sendPendingLaunch() {
+        if (!pendingLaunch) return true;
+        if (!controlSocket || controlSocket.readyState !== WebSocket.OPEN) return false;
+        const message = pendingLaunch;
+        pendingLaunch = null;
+        controlSocket.send(JSON.stringify(message));
+        if (codecMode === 'mjpeg') {
+            controlSocket.send(JSON.stringify({ type: 'codec', mode: 'mjpeg' }));
+        }
+        sendViewportSize();
+        return true;
     }
 
     function clearCanvas() {
@@ -1635,6 +1652,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     function goHome() {
         collapseOverlayMenu();
         isLauncherMode = true;
+        pendingLaunch = null;
         clearLaunchTimeout();
         clearFrameWatchdog();
         closeInputBubble(true);

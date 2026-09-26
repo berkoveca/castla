@@ -1458,29 +1458,14 @@ class MirrorForegroundService : Service() {
                 server.setAudioCodecListener { codec -> onAudioCodecRequest(codec) }
                 server.setAudioSocketConnectedListener { audioOrchestrator?.onAudioSocketConnected() }
                 server.setGoHomeListener {
-                    Log.i(TAG, "Navigating to home requested by Web Launcher")
-                    FileLogger.i(TAG, "Go home from car: vd=${virtualDisplayManager?.getDisplayId()} app=$currentVdApp", durable = true)
-                    val previousApp = currentVdApp
-                    dismissSplitPresentation(clearState = true)
-                    if (!singleVdSplit) {
-                        releaseSecondaryPipeline(clearState = true)
-                    }
-                    // Force-stop BEFORE going home so the old app's screen
-                    // is removed before the home animation starts
-                    forceStopAppIfNeeded(previousApp)
-                    if (virtualDisplayManager?.hasVirtualDisplay() == true) {
-                        virtualDisplayManager?.launchHomeOnDisplay()
-                    } else {
-                        Log.w(TAG, "Skipping HOME launch: virtual display is not active")
-                    }
-                    currentVdApp = "HOME"
-                    currentWebUrl = null
-                    clearSplitState()
+                    carRequests.submit("primary", CarRequest("HOME") { goHomeFromCar() })
                 }
                 server.setAppLaunchListener { pkgName, componentName, splitMode, pane ->
-                    launchAppFromWebLauncher(pkgName, componentName, splitMode, pane)
+                    val key = if (pane == "secondary") "secondary" else "primary"
+                    carRequests.submit(key, CarRequest(pkgName.ifBlank { "close-$pane" }) {
+                        launchAppFromWebLauncher(pkgName, componentName, splitMode, pane)
+                    })
                 }
-
                 server.setCloseSplitListener {
                     Log.i(TAG, "Close split requested — restoring primary fullscreen")
                     FileLogger.i(TAG, "Close split from car", durable = true)
@@ -2763,6 +2748,52 @@ class MirrorForegroundService : Service() {
                 Log.w(TAG, "Failed to dismiss split presentation", e)
             }
         }
+    }
+
+    private fun goHomeFromCar() {
+        Log.i(TAG, "Navigating to home requested by Web Launcher")
+        FileLogger.i(TAG, "Go home from car: vd=${virtualDisplayManager?.getDisplayId()} app=$currentVdApp", durable = true)
+        val previousApp = currentVdApp
+        dismissSplitPresentation(clearState = true)
+        if (!singleVdSplit) {
+            releaseSecondaryPipeline(clearState = true)
+        }
+        // Force-stop BEFORE going home so the old app's screen
+        // is removed before the home animation starts
+        forceStopAppIfNeeded(previousApp)
+        if (virtualDisplayManager?.hasVirtualDisplay() == true) {
+            virtualDisplayManager?.launchHomeOnDisplay()
+        } else {
+            Log.w(TAG, "Skipping HOME launch: virtual display is not active")
+        }
+        currentVdApp = "HOME"
+        currentWebUrl = null
+        clearSplitState()
+    }
+
+    /** A queued car request: [label] names it in the log. */
+    private class CarRequest(val label: String, val action: () -> Unit)
+
+    /**
+     * App launches and HOME from the car run here, one at a time, off the
+     * WebSocket thread; taps still waiting collapse to the newest per pane.
+     */
+    private val carRequestExecutor by lazy {
+        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "car-requests").apply { isDaemon = true }
+        }
+    }
+    private val carRequests by lazy {
+        com.castla.mirror.server.LatestWinsRunner<CarRequest>(
+            executor = carRequestExecutor,
+            run = { req ->
+                val startedAt = android.os.SystemClock.elapsedRealtime()
+                req.action()
+                FileLogger.i(TAG, "Car request '${req.label}' done in ${android.os.SystemClock.elapsedRealtime() - startedAt}ms")
+            },
+            superseded = { req -> FileLogger.i(TAG, "Car request '${req.label}' skipped: a newer tap replaced it") },
+            failed = { req, t -> FileLogger.w(TAG, "Car request '${req.label}' failed: ${t.javaClass.simpleName}: ${t.message}") }
+        )
     }
 
     private fun launchAppFromWebLauncher(pkgName: String, componentName: String? = null, splitMode: Boolean = false, pane: String = if (splitMode) "secondary" else "primary") {
