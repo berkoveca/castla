@@ -25,6 +25,7 @@ object DiagnosticsCollector {
             "Health now" to listOf(safe { HealthMonitor.snapshot(context, tunnel) }),
             "Mirroring session" to sessionLines(),
             "Security" to safeList { securityLines(context) },
+            "Login attempts and connections (oldest → newest)" to safeList { loginAttemptLines() },
             "Reboot check (from previous run)" to CrashBreadcrumbs.summaryLines(),
             "Previous app exits (Android records, newest first)" to safeList { CrashBreadcrumbs.exitReasonLines(context) },
             "Post-mortem (via Shizuku shell)" to PostMortem.summaryLines(),
@@ -32,6 +33,14 @@ object DiagnosticsCollector {
         )
         val log = if (includeLog) safe { FileLogger.readRecentTail(maxChars) } else ""
         return DiagnosticReport.build("Castla diagnostic report", sections, log, maxChars)
+    }
+
+    private fun loginAttemptLines(): List<String> {
+        // Whole log (current + rotated, ~1 MB max) so older attempts are not lost to the tail limit.
+        val lines = FileLogger.getLogFiles().reversed().flatMap { f -> f.readLines() }
+        val entries = AuthAttempts.extract(lines)
+        if (entries.isEmpty()) return listOf("none recorded")
+        return listOf("summary: " + AuthAttempts.summary(entries)) + entries
     }
 
     private fun securityLines(context: Context): List<String> {

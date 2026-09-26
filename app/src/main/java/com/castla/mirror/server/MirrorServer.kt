@@ -645,7 +645,9 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         val cf = session.headers["cf-connecting-ip"]
         val ip = AccessPolicy.clientKey(session.remoteIpAddress, cf)
         val via = if (cf.isNullOrBlank()) "local" else "tunnel"
-        return "src=${DiagnosticSanitizer.maskIp(ip)} via=$via " +
+        // Cloudflare's 2-letter country of the visitor: tells "my car" from "someone abroad".
+        val country = session.headers["cf-ipcountry"]?.takeIf { it.matches(Regex("[A-Za-z]{2}")) }?.uppercase()
+        return "src=${DiagnosticSanitizer.maskIp(ip)} via=$via${country?.let { " country=$it" } ?: ""} " +
             "ua=${DiagnosticSanitizer.safeMessage(session.headers["user-agent"] ?: "<none>").take(160)}"
     }
 
