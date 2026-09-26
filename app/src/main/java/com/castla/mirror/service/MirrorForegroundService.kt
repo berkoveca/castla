@@ -3965,7 +3965,7 @@ class MirrorForegroundService : Service() {
         if (blankRecoveryJob?.isActive == true || !browserConnected || isCleanupInProgress) return
         blankRecoveryJob = serviceScope.launch {
             val vdId = virtualDisplayManager?.getDisplayId() ?: -1
-            FileLogger.w(TAG, "Black screen detected on VD $vdId (keyframes ${keyFrameBytes}B, app=$app) — recreating the display", durable = true)
+            FileLogger.w(TAG, "Black screen detected on VD $vdId (keyframes ${keyFrameBytes}B, app=$app) — recreating the display")
             logBlankDisplayState(vdId)
             forceVdRecreate = true
             try {
