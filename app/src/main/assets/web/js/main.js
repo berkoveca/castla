@@ -9,6 +9,31 @@ let secondaryVideoSocket = null;
 let secondaryTouchHandler = null;
 let secondaryDecoder = null;
 
+// Page-side failures (decoder errors, stalls, reconnects, launch timeouts) are sent
+// to the phone's persistent log — the car browser has no visible console. Events
+// raised while the control socket is down are queued (bounded) and flushed on open.
+const clientLogQueue = [];
+function clientLog(event, detail) {
+    try {
+        const msg = JSON.stringify({ type: 'clientEvent', event: String(event),
+            detail: String(detail === undefined ? '' : detail).slice(0, 200), t: Date.now() });
+        if (controlSocket && controlSocket.readyState === WebSocket.OPEN) {
+            controlSocket.send(msg);
+        } else {
+            if (clientLogQueue.length >= 30) clientLogQueue.shift();
+            clientLogQueue.push(msg);
+        }
+    } catch (_) {}
+}
+function flushClientLog() {
+    while (clientLogQueue.length && controlSocket && controlSocket.readyState === WebSocket.OPEN) {
+        try { controlSocket.send(clientLogQueue.shift()); } catch (_) { break; }
+    }
+}
+window.addEventListener('error', (e) => clientLog('jsError', `${e.message} @${(e.filename || '').split('/').pop()}:${e.lineno}`));
+window.addEventListener('unhandledrejection', (e) => clientLog('unhandledRejection', e.reason && (e.reason.message || e.reason)));
+document.addEventListener('visibilitychange', () => clientLog('visibility', document.visibilityState));
+
 // Split strategy: 'dual_stream' = two VDs with separate video streams
 const SPLIT_STRATEGY = 'dual_stream';
 
@@ -384,7 +409,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             secondaryDecoder = new H264Decoder(
                 (frame) => secondaryFramePacer.push(frame),
-                (error) => console.error('[Main] Secondary decoder error:', error)
+                (error) => { console.error('[Main] Secondary decoder error:', error); clientLog('decoderError', 'secondary: ' + (error && error.message || error)); }
             );
             secondaryDecoder.setBacklogProfile(playbackProfile);
             secondaryFramePacer.setDecoder(secondaryDecoder);
@@ -393,7 +418,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else if (typeof createImageBitmap !== 'undefined') {
             secondaryDecoder = new FallbackDecoder(
                 () => {},
-                (error) => console.error('[Main] Secondary fallback error:', error)
+                (error) => { console.error('[Main] Secondary fallback error:', error); clientLog('decoderError', 'secondary-fallback: ' + (error && error.message || error)); }
             );
             await secondaryDecoder.init(secondaryCanvas);
             secondaryDecoder.renderer?.setFitMode?.(getEffectiveSecondaryFitMode());
@@ -885,7 +910,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             console.log('[Main] Using MSE H264 decoder (fMP4 over Media Source)');
             const mseVideo = document.getElementById('mse-video');
             if (mseVideo) mseVideo.style.display = 'block';
-            decoder = new MseDecoder((error) => console.error('[Main] MSE error:', error));
+            decoder = new MseDecoder((error) => { console.error('[Main] MSE error:', error); clientLog('decoderError', 'mse: ' + (error && error.message || error)); });
             decoder.onFirstFrame = () => {
                 if (!firstFrameReceived) { firstFrameReceived = true; checkReady(); }
             };
@@ -911,7 +936,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             decoder = new H264Decoder(
                 (frame) => framePacer.push(frame),
-                (error) => console.error('[Main] Decoder error:', error)
+                (error) => { console.error('[Main] Decoder error:', error); clientLog('decoderError', 'webcodecs: ' + (error && error.message || error)); }
             );
             decoder.setBacklogProfile(playbackProfile);
             framePacer.setDecoder(decoder);
@@ -928,7 +953,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         checkReady();
                     }
                 },
-                (error) => console.error('[Main] Fallback error:', error)
+                (error) => { console.error('[Main] Fallback error:', error); clientLog('decoderError', 'fallback: ' + (error && error.message || error)); }
             );
             await decoder.init(canvas);
             decoder.renderer?.setFitMode?.(getEffectivePrimaryFitMode());
@@ -982,7 +1007,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         };
 
-        videoSocket.onclose = () => {
+        videoSocket.onclose = (ev) => {
+            clientLog('videoClosed', `code=${ev && ev.code} reason=${ev && ev.reason} firstFrame=${firstFrameReceived}`);
             clearFrameWatchdog();
             if (!isLauncherMode) {
                 setStatus('Disconnected', 'error');
@@ -991,7 +1017,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             scheduleReconnect();
         };
 
-        videoSocket.onerror = (error) => console.error('[Main] Video WebSocket error:', error);
+        videoSocket.onerror = (error) => { console.error('[Main] Video WebSocket error:', error); clientLog('videoError', 'websocket error'); };
     }
 
     function checkReady() {
@@ -1053,12 +1079,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!stallKeyframeAsked) {
             stallKeyframeAsked = true;
             console.warn('[Main] No frames for', FRAME_TIMEOUT_MS, 'ms — requesting keyframe before reconnecting');
+            clientLog('frameStall', `no frame for ${FRAME_TIMEOUT_MS}ms, asking keyframe`);
             try { socket.send('requestKeyframe'); } catch (_) {}
             armFrameWatchdog(socket);
             return;
         }
         stallKeyframeAsked = false;
         console.warn('[Main] Video stream stalled — no frame for', FRAME_TIMEOUT_MS, 'ms. Triggering reconnect.');
+        clientLog('frameStall', `still no frame after keyframe request, reconnecting`);
         setStatus('Disconnected', 'error');
         showOverlay();
         try { socket.close(); } catch (_) {}
@@ -1070,6 +1098,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         clearTimeout(reconnectTimer);
         const delay = Math.min(2000 * Math.pow(1.5, reconnectAttempts), 20000);
         reconnectAttempts++;
+        clientLog('reconnect', `attempt=${reconnectAttempts} in ${Math.round(delay)}ms`);
         reconnectTimer = setTimeout(() => {
             isReconnecting = false;
             if (!videoSocket || videoSocket.readyState === WebSocket.CLOSED) connectVideo();
@@ -1159,6 +1188,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!controlSocket || controlSocket.readyState !== WebSocket.OPEN) return;
         if (Date.now() - lastControlMessageAt > CONTROL_SILENCE_TIMEOUT_MS) {
             console.warn('[Main] Control socket silent for', CONTROL_SILENCE_TIMEOUT_MS, 'ms — reconnecting');
+            clientLog('controlSilent', `${CONTROL_SILENCE_TIMEOUT_MS}ms`);
             try { controlSocket.close(); } catch (_) {}
         }
     }, 5000);
@@ -1171,6 +1201,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         controlSocket = new WebSocket(wsUrl);
 
         controlSocket.onopen = () => {
+            flushClientLog();
             reconnectAttempts = 0;
             lastControlMessageAt = Date.now();
             closeInputBubble(true);
@@ -1312,7 +1343,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             } catch (e) {}
         };
 
-        controlSocket.onclose = () => {
+        controlSocket.onclose = (ev) => {
+            clientLog('controlClosed', `code=${ev && ev.code}`);
             clearInterval(qualityReportInterval);
             scheduleReconnect();
         };
@@ -1337,6 +1369,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             renderSplitLauncherApps(apps);
         } catch (err) {
             console.error('[Launcher]', err);
+            clientLog('launcherError', err && err.message || err);
             showLauncherNotice('Failed to load apps. Try refreshing.');
         }
     }
@@ -1551,6 +1584,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     homeBtn.style.display = 'none';
                     hideOverlay();
                     showLauncherNotice('Launch timed out. Try again.');
+                    clientLog('launchTimeout', 'no first frame within 12000ms');
                 }, 12000);
             }
         }, 50);
@@ -1744,7 +1778,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     audioPlayer = new AudioPlayer();
-    audioPlayer.onDisconnected = () => scheduleReconnect();
+    audioPlayer.onDisconnected = () => { clientLog('audioClosed', ''); scheduleReconnect(); };
     const splashScreen = document.getElementById('splash-screen');
     const splashUnmute = document.getElementById('splash-unmute');
     let splashReady = false;

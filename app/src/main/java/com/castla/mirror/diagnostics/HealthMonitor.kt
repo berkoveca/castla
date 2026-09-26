@@ -25,6 +25,7 @@ object HealthMonitor {
         parts += batteryPart(context)
         parts += memoryPart(context)
         parts += "appRss=${rssMb(File("/proc/self/status"))}"
+        parts += procPart()
         if (tunnel != null) parts += "tunnel=${tunnel.healthPart()}"
         return parts.joinToString(" ")
     }
@@ -71,6 +72,29 @@ object HealthMonitor {
             "lowMemory=${mi.lowMemory} lmkThreshold=${mi.threshold / (1024 * 1024)}MB"
     } catch (_: Throwable) {
         "mem=?"
+    }
+
+    private var lastCpuTicks = -1L
+    private var lastCpuAtMs = 0L
+
+    /**
+     * Load average (system-wide runnable load; ~8 cores here, so >8 means
+     * saturated), Castla's own CPU since the previous snapshot in % of one core,
+     * and thread / open-file counts (leaks show up as steady growth).
+     */
+    @Synchronized
+    private fun procPart(): String {
+        val load = try { ProcStats.loadAvg(File("/proc/loadavg").readText()) } catch (_: Throwable) { null } ?: "?"
+        val threads = try { ProcStats.threads(File("/proc/self/status").readText()) } catch (_: Throwable) { null }
+        val fds = try { File("/proc/self/fd").list()?.size } catch (_: Throwable) { null }
+        val cpu = try {
+            val ticks = ProcStats.cpuTicks(File("/proc/self/stat").readText())
+            val now = android.os.SystemClock.elapsedRealtime()
+            val pct = if (ticks != null && lastCpuTicks >= 0) ProcStats.cpuPercent(lastCpuTicks, ticks, now - lastCpuAtMs) else null
+            if (ticks != null) { lastCpuTicks = ticks; lastCpuAtMs = now }
+            pct
+        } catch (_: Throwable) { null }
+        return "load=$load appCpu=${cpu?.let { "$it%" } ?: "?"} threads=${threads ?: "?"} fds=${fds ?: "?"}"
     }
 
     /** VmRSS of a /proc/<pid>/status file, formatted in MB, or "?". */

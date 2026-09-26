@@ -173,6 +173,7 @@ class MirrorForegroundService : Service() {
          * state (thermal, battery temp, memory, tunnel) at most this long before it.
          */
         private const val HEALTH_HEARTBEAT_INTERVAL_MS = 60_000L
+        private const val HEALTH_HEARTBEAT_ACTIVE_MS = 15_000L
         /**
          * Auto-resolution encode size (short side), fixed for the session. 720 short
          * side was confirmed decoding on the car; 800 is a small, safe step up.
@@ -221,6 +222,8 @@ class MirrorForegroundService : Service() {
         stopCloudflareTunnel("orphan_timeout")
     }
     private var healthHeartbeatJob: Job? = null
+    /** Display add/remove/change + main-thread stall tracing for the session. */
+    private var systemEventTracer: com.castla.mirror.diagnostics.SystemEventTracer? = null
     /** Serializes browser connect vs. (grace-expired) disconnect teardown. */
     private val connectionLock = Any()
     /** Bumped on every browser (re)connect; a pending teardown from an older generation is void. */
@@ -957,6 +960,8 @@ class MirrorForegroundService : Service() {
         FileLogger.i(TAG, "Performing cleanup: $effectiveReason | ${HealthMonitor.snapshot(this, cloudflareTunnel)}", durable = true)
         MirrorDiagnostics.endSession(effectiveReason)
         try { healthHeartbeatJob?.cancel() } catch (_: Exception) {}
+        try { systemEventTracer?.stop() } catch (_: Throwable) {}
+        systemEventTracer = null
         healthHeartbeatJob = null
         CrashBreadcrumbs.markSession(this, active = false, reason = "ended:$effectiveReason")
         isCleanupInProgress = true
@@ -1175,19 +1180,35 @@ class MirrorForegroundService : Service() {
      */
     private fun startHealthHeartbeat() {
         healthHeartbeatJob?.cancel()
+        try {
+            systemEventTracer?.stop()
+            systemEventTracer = com.castla.mirror.diagnostics.SystemEventTracer(this).also { it.start() }
+        } catch (t: Throwable) {
+            FileLogger.w(TAG, "system event tracer failed to start: ${t.javaClass.simpleName}")
+        }
         healthHeartbeatJob = serviceScope.launch(Dispatchers.IO) {
+            var lastBeatAt = android.os.SystemClock.elapsedRealtime()
             while (isActive) {
                 try {
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    val stream = if (browserConnected) {
+                        "stream[" + (mirrorServer?.streamStatsAndReset(now - lastBeatAt) ?: "-") +
+                            " quality: dropped=$lastQualityDroppedFrames delay=${lastQualityAvgDelayMs.toInt()}ms backlog=$lastQualityBacklogDrops] "
+                    } else ""
+                    lastBeatAt = now
                     val line = "browser=${if (browserConnected) "connected" else "none"} " +
                         "screen=${screenOffPolicy.state} vd=${virtualDisplayManager?.getDisplayId() ?: -1} " +
-                        "bitrate=${currentBitrate / 1000}kbps ${currentWidth}x$currentHeight " +
+                        "secondaryVd=$secondaryDisplayId app=${currentVdApp.ifEmpty { "-" }} " +
+                        "bitrate=${currentBitrate / 1000}kbps ${currentWidth}x$currentHeight fps=${thermalFpsOverride ?: currentFps} " +
+                        stream +
                         HealthMonitor.snapshot(this@MirrorForegroundService, cloudflareTunnel)
                     FileLogger.i("Health", line, durable = true)
                     CrashBreadcrumbs.recordHeartbeat(this@MirrorForegroundService, line)
                 } catch (t: Throwable) {
                     Log.w(TAG, "health heartbeat failed", t)
                 }
-                kotlinx.coroutines.delay(HEALTH_HEARTBEAT_INTERVAL_MS)
+                // Denser while mirroring: the soft reboots happen mid-session.
+                kotlinx.coroutines.delay(if (browserConnected) HEALTH_HEARTBEAT_ACTIVE_MS else HEALTH_HEARTBEAT_INTERVAL_MS)
             }
         }
     }

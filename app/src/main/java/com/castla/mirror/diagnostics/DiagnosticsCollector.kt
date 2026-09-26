@@ -16,7 +16,7 @@ import com.castla.mirror.service.MirrorForegroundService
 object DiagnosticsCollector {
 
     /** Clipboard payloads well past ~100 KB risk TransactionTooLargeException on some devices. */
-    const val MAX_CLIPBOARD_CHARS = 60_000
+    const val MAX_CLIPBOARD_CHARS = 90_000
 
     fun buildReport(context: Context, maxChars: Int = MAX_CLIPBOARD_CHARS, includeLog: Boolean = true): String {
         val tunnel = CloudflareTunnelManager.getInstance(context)

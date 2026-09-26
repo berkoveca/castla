@@ -1,5 +1,6 @@
 package com.castla.mirror.capture
 
+import com.castla.mirror.diagnostics.FileLogger
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
@@ -45,7 +46,7 @@ class VideoEncoder(
                 "High"
             )
         } catch (e: Throwable) {
-            Log.w(TAG, "High Profile failed, falling back to Baseline", e)
+            FileLogger.w(TAG, "High Profile failed, falling back to Baseline", e)
             releaseQuietly()
             createEncoderWithProfile(
                 MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline,
@@ -86,7 +87,7 @@ class VideoEncoder(
             Log.i(TAG, "Encoder created ($profileName): ${width}x${height} @ ${bitrate / 1000}kbps, ${fps}fps")
             return surface
         } catch (e: Throwable) {
-            Log.w(TAG, "configure($profileName) failed with extra keys — retrying stripped format", e)
+            FileLogger.w(TAG, "configure($profileName) failed with extra keys — retrying stripped format", e)
             try { encoder.stop() } catch (_: Throwable) {}
             try { encoder.release() } catch (_: Throwable) {}
             codec = null
@@ -165,7 +166,7 @@ class VideoEncoder(
 
                     codec.releaseOutputBuffer(index, false)
                 } catch (e: Throwable) {
-                    Log.e(TAG, "Error processing output buffer", e)
+                    FileLogger.e(TAG, "Error processing output buffer", e)
                     try { codec.releaseOutputBuffer(index, false) } catch (_: Exception) {}
                     if (e is OutOfMemoryError || e is MediaCodec.CodecException) {
                         onError?.invoke(e.javaClass.simpleName + ": " + (e.message ?: ""))
@@ -174,20 +175,24 @@ class VideoEncoder(
             }
 
             override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) {
-                Log.e(TAG, "Encoder error", e)
+                FileLogger.e(TAG, "Encoder error", e)
                 onError?.invoke(e.diagnosticInfo ?: e.message ?: "CodecException")
             }
 
             override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {
                 Log.i(TAG, "Output format changed: $format")
+                FileLogger.i(TAG, "Encoder output format: ${format.getString(MediaFormat.KEY_MIME)} " +
+                    "${format.getIntegerOrNull(MediaFormat.KEY_WIDTH)}x${format.getIntegerOrNull(MediaFormat.KEY_HEIGHT)} " +
+                    "profile=${format.getIntegerOrNull(MediaFormat.KEY_PROFILE)} level=${format.getIntegerOrNull(MediaFormat.KEY_LEVEL)}")
             }
         }, encoderHandler)
 
         try {
             encoder.start()
             Log.i(TAG, "Encoder started")
+            FileLogger.i(TAG, "Encoder started: ${try { encoder.name } catch (_: Throwable) { "?" }} ${width}x$height")
         } catch (e: Throwable) {
-            Log.e(TAG, "Encoder start failed", e)
+            FileLogger.e(TAG, "Encoder start failed", e)
             onError?.invoke(e.javaClass.simpleName + ": " + (e.message ?: "start failed"))
         }
     }
@@ -246,7 +251,7 @@ class VideoEncoder(
             codec?.setParameters(params)
             Log.d(TAG, "Keyframe requested")
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to request keyframe", e)
+            FileLogger.w(TAG, "Failed to request keyframe", e)
         }
     }
 
@@ -262,7 +267,7 @@ class VideoEncoder(
             codec?.setParameters(params)
             Log.i(TAG, "Bitrate changed to ${bps / 1000}kbps")
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to set bitrate", e)
+            FileLogger.w(TAG, "Failed to set bitrate", e)
         }
     }
 
@@ -271,7 +276,7 @@ class VideoEncoder(
         try {
             codec?.stop()
         } catch (e: Exception) {
-            Log.w(TAG, "Error stopping encoder", e)
+            FileLogger.w(TAG, "Error stopping encoder", e)
         }
     }
 
@@ -280,7 +285,7 @@ class VideoEncoder(
         try {
             codec?.release()
         } catch (e: Exception) {
-            Log.w(TAG, "Error releasing encoder", e)
+            FileLogger.w(TAG, "Error releasing encoder", e)
         }
         codec = null
         encoderThread?.quitSafely()
@@ -289,3 +294,6 @@ class VideoEncoder(
         Log.i(TAG, "Encoder released")
     }
 }
+
+private fun MediaFormat.getIntegerOrNull(key: String): Int? =
+    try { if (containsKey(key)) getInteger(key) else null } catch (_: Throwable) { null }

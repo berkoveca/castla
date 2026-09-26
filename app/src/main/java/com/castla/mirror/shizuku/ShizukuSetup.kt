@@ -215,7 +215,7 @@ class ShizukuSetup {
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            privilegedService = IPrivilegedService.Stub.asInterface(binder)
+            privilegedService = IPrivilegedService.Stub.asInterface(binder)?.let { TracingPrivilegedService.wrap(it) }
             _serviceConnected.value = true
             bindingInProgress = false
             userServiceBound = true

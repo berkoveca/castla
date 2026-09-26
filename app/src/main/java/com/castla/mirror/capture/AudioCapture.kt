@@ -1,5 +1,6 @@
 package com.castla.mirror.capture
 
+import com.castla.mirror.diagnostics.FileLogger
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioPlaybackCaptureConfiguration
@@ -56,7 +57,7 @@ class AudioCapture(
 
     fun start(onAudioData: (data: ByteArray) -> Unit) {
         if (!isSupported()) {
-            Log.w(TAG, "AudioPlaybackCapture requires Android 10+")
+            FileLogger.w(TAG, "AudioPlaybackCapture requires Android 10+")
             return
         }
 
@@ -84,7 +85,7 @@ class AudioCapture(
                 Log.i(TAG, "Audio capture started: ${SAMPLE_RATE}Hz, ${CHANNEL_COUNT}ch, $codec")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start audio capture", e)
+            FileLogger.e(TAG, "Failed to start audio capture", e)
             stop()
         }
     }
@@ -108,7 +109,7 @@ class AudioCapture(
                 Log.i(TAG, "Audio capture started (PCM only): ${SAMPLE_RATE}Hz, ${CHANNEL_COUNT}ch")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start PCM audio capture", e)
+            FileLogger.e(TAG, "Failed to start PCM audio capture", e)
             stop()
         }
     }
@@ -153,7 +154,7 @@ class AudioCapture(
                             codec.queueInputBuffer(index, 0, 0, 0, 0)
                         }
                     } catch (e: IllegalStateException) {
-                        Log.w(TAG, "Opus input buffer error (codec released?)", e)
+                        FileLogger.w(TAG, "Opus input buffer error (codec released?)", e)
                     }
                 }
 
@@ -190,12 +191,12 @@ class AudioCapture(
                         }
                         codec.releaseOutputBuffer(index, false)
                     } catch (e: IllegalStateException) {
-                        Log.w(TAG, "Opus output buffer error (codec released?)", e)
+                        FileLogger.w(TAG, "Opus output buffer error (codec released?)", e)
                     }
                 }
 
                 override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) {
-                    Log.e(TAG, "Opus encoder error", e)
+                    FileLogger.e(TAG, "Opus encoder error", e)
                     isRunning = false
                 }
 
@@ -209,7 +210,7 @@ class AudioCapture(
             Log.i(TAG, "Opus encoder ready (async callback)")
             true
         } catch (e: Exception) {
-            Log.w(TAG, "Opus encoder unavailable, using raw PCM", e)
+            FileLogger.w(TAG, "Opus encoder unavailable, using raw PCM", e)
             try { encoder?.stop() } catch (_: Exception) {}
             try { encoder?.release() } catch (_: Exception) {}
             encoder = null
@@ -251,12 +252,12 @@ class AudioCapture(
                         System.arraycopy(pcmBuffer, 0, msg, 5, read)
                         onAudioData(msg)
                     } else if (read < 0) {
-                        Log.w(TAG, "REMOTE_SUBMIX pipe closed")
+                        FileLogger.w(TAG, "REMOTE_SUBMIX pipe closed")
                         break
                     }
                 }
             } catch (e: Exception) {
-                if (isRunning) Log.w(TAG, "REMOTE_SUBMIX read error", e)
+                if (isRunning) FileLogger.w(TAG, "REMOTE_SUBMIX read error", e)
             } finally {
                 try { input.close() } catch (_: Exception) {}
             }
@@ -298,7 +299,7 @@ class AudioCapture(
                     return
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "REMOTE_SUBMIX via Shizuku failed, falling back to AudioPlaybackCapture", e)
+                FileLogger.w(TAG, "REMOTE_SUBMIX via Shizuku failed, falling back to AudioPlaybackCapture", e)
             }
         }
 
@@ -324,7 +325,7 @@ class AudioCapture(
             .setAudioFormat(audioFormat)
             .setBufferSizeInBytes(maxOf(minBufferSize * 2, 8192))
             .build()
-        Log.w(TAG, "Using AudioPlaybackCapture (BASIC usages only — navigation audio will NOT be captured)")
+        FileLogger.w(TAG, "Using AudioPlaybackCapture (BASIC usages only — navigation audio will NOT be captured)")
     }
 
     fun stop() {

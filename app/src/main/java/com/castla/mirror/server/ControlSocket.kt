@@ -19,6 +19,9 @@ class ControlSocket(
 
     companion object {
         private const val TAG = "ControlSocket"
+        private val QUIET_TYPES = setOf("touch", "qualityReport", "ka", "textInput", "compositionUpdate", "log", "clientEvent")
+        private val PRIVATE_KEYS = setOf("text", "value", "password")
+        private val RISKY_TYPES = setOf("launchApp", "goHome", "closeSecondary", "closeSplit", "displayDensity", "viewport", "codec")
     }
 
     override fun onOpen() {
@@ -34,6 +37,21 @@ class ControlSocket(
             "[control] code=$code reason=${reason ?: "<none>"} remoteInitiated=$initiatedByRemote")
     }
 
+    /**
+     * Timeline of what the car page asked for (launch, home, split, density,
+     * viewport, codec…) so the log shows the driver's last actions before a
+     * failure. High-frequency and text-carrying messages are skipped.
+     */
+    private fun logPageAction(type: String, json: JSONObject) {
+        if (type in QUIET_TYPES) return
+        try {
+            val fields = json.keys().asSequence()
+                .filter { it != "type" && it !in PRIVATE_KEYS }
+                .joinToString(" ") { k -> "$k=${json.opt(k).toString().take(80)}" }
+            FileLogger.i("Page", "car→ $type $fields".trimEnd(), durable = type in RISKY_TYPES)
+        } catch (_: Throwable) { }
+    }
+
     override fun onMessage(message: NanoWSD.WebSocketFrame) {
         try {
             // Binary frames: 10-byte touch protocol [action:u8][id:u8][x:f32LE][y:f32LE]
@@ -46,6 +64,7 @@ class ControlSocket(
 
             val json = JSONObject(message.textPayload)
             val type = json.optString("type", "")
+            logPageAction(type, json)
 
             when (type) {
                 "touch" -> {
@@ -121,6 +140,15 @@ class ControlSocket(
                     if (scale in 0.4f..1.5f) {
                         server.onDisplayDensityChange(scale)
                     }
+                }
+                "clientEvent" -> {
+                    // Page-side failure/transition (decoder error, stall, reconnect,
+                    // launch timeout, JS error) — the car browser has no visible console.
+                    val event = json.optString("event", "?").take(40)
+                    val detail = json.optString("detail", "").take(200)
+                    val quiet = event == "visibility" || event == "reconnect"
+                    if (quiet) FileLogger.i("client", "$event $detail")
+                    else FileLogger.w("client", "$event $detail")
                 }
                 "qualityReport" -> {
                     val droppedFrames = json.optInt("droppedFrames", 0)

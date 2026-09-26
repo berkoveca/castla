@@ -347,6 +347,7 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
 
         val sockets = if (channel == "secondary") secondaryVideoSockets else primaryVideoSockets
         val deadSockets = mutableListOf<VideoStreamSocket>()
+        val sendStart = android.os.SystemClock.elapsedRealtime()
         for (socket in sockets) {
             try {
                 socket.sendBinary(frame)
@@ -354,7 +355,38 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
                 deadSockets.add(socket)
             }
         }
+        val sendMs = android.os.SystemClock.elapsedRealtime() - sendStart
+        synchronized(streamStatsLock) {
+            statFrames++
+            if (isKeyFrame) statKeyFrames++
+            statBytes += frame.size.toLong() * sockets.size
+            statSendErrors += deadSockets.size
+            if (sendMs > statMaxSendMs) statMaxSendMs = sendMs
+            if (sockets.isEmpty()) statNoViewer++
+        }
         deadSockets.forEach { unregisterVideoSocket(channel, it) }
+    }
+
+    private val streamStatsLock = Any()
+    private var statFrames = 0L
+    private var statKeyFrames = 0L
+    private var statBytes = 0L
+    private var statSendErrors = 0L
+    private var statMaxSendMs = 0L
+    private var statNoViewer = 0L
+
+    /**
+     * Video frames broadcast since the previous call, then reset. A high
+     * maxSend means the socket write blocked (network/tunnel backpressure).
+     */
+    fun streamStatsAndReset(intervalMs: Long): String = synchronized(streamStatsLock) {
+        val secs = (intervalMs / 1000.0).coerceAtLeast(0.001)
+        val line = "frames=$statFrames (${"%.1f".format(java.util.Locale.US, statFrames / secs)}fps) " +
+            "key=$statKeyFrames sent=${(statBytes * 8 / 1000.0 / secs).toLong()}kbps " +
+            "maxSend=${statMaxSendMs}ms sendErr=$statSendErrors noViewer=$statNoViewer " +
+            "sockets=v${primaryVideoSockets.size}/${secondaryVideoSockets.size} a${audioSockets.size} c${controlSockets.size}"
+        statFrames = 0; statKeyFrames = 0; statBytes = 0; statSendErrors = 0; statMaxSendMs = 0; statNoViewer = 0
+        line
     }
 
     private var cachedAudioConfig: ByteArray? = null
