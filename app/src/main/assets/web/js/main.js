@@ -1690,6 +1690,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     homeBtn.addEventListener('click', goHome);
 
+    /**
+     * 'left' / 'right' for a deliberate sideways swipe, else null. Needs at
+     * least minDx sideways and at least twice as much sideways as vertical
+     * movement, so a vertical scroll is never read as a swipe.
+     */
+    function horizontalSwipe(start, end, minDx) {
+        if (!start || !end) return null;
+        const dx = end.clientX - start.x;
+        const dy = end.clientY - start.y;
+        if (Math.abs(dx) < minDx || Math.abs(dx) < 2 * Math.abs(dy)) return null;
+        return dx > 0 ? 'right' : 'left';
+    }
+
     // ── Edge Swipe Handlers for Split Drawer ──
     if (splitHandle) {
         splitHandle.addEventListener('click', () => {
@@ -1697,34 +1710,35 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
 
         // Swipe on handle
-        let startX = 0;
+        let handleStart = null;
         splitHandle.addEventListener('touchstart', (e) => {
-            startX = e.touches[0].clientX;
+            handleStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
         }, {passive: true});
 
         splitHandle.addEventListener('touchend', (e) => {
-            let endX = e.changedTouches[0].clientX;
-            if (startX - endX > 15) { // Swiped left
-                splitDrawer.classList.add('open');
-            } else if (endX - startX > 15) { // Swiped right
-                splitDrawer.classList.remove('open');
-            }
+            const dir = horizontalSwipe(handleStart, e.changedTouches[0], 15);
+            handleStart = null;
+            if (dir === 'left') splitDrawer.classList.add('open');
+            else if (dir === 'right') splitDrawer.classList.remove('open');
         }, {passive: true});
     }
 
     if (splitDrawer) {
-        // Swipe on the drawer itself to close it
-        let drawerStartX = 0;
+        // Swipe right on the drawer closes it — but only a clearly sideways
+        // swipe: scrolling the app list up/down drifts sideways too and used
+        // to close the drawer mid-scroll.
+        let drawerStart = null;
         splitDrawer.addEventListener('touchstart', (e) => {
-            drawerStartX = e.touches[0].clientX;
+            drawerStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
         }, {passive: true});
 
         splitDrawer.addEventListener('touchend', (e) => {
-            let endX = e.changedTouches[0].clientX;
-            if (endX - drawerStartX > 30) { // Swiped right
-                splitDrawer.classList.remove('open');
-            }
+            const dir = horizontalSwipe(drawerStart, e.changedTouches[0], 60);
+            drawerStart = null;
+            if (dir === 'right') splitDrawer.classList.remove('open');
         }, {passive: true});
+
+        splitDrawer.addEventListener('touchcancel', () => { drawerStart = null; }, {passive: true});
     }
 
     // Split toolbar lives inside #overlay-menu-panel; visibility is driven by
