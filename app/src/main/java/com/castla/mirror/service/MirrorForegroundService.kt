@@ -1749,9 +1749,9 @@ class MirrorForegroundService : Service() {
             secondaryHeight = height
             secondaryTouchInjector = (secondaryTouchInjector ?: TouchInjector(width, height)).also { injector ->
                 injector.updateDimensions(width, height)
-                injector.setVirtualDisplayInjector { action, x, y, pointerId ->
+                injector.setVirtualDisplayInjector { m ->
                     try {
-                        shizukuSetup?.privilegedService?.injectInput(secondaryDisplayId, action, x, y, pointerId)
+                        shizukuSetup?.privilegedService?.injectMotionEvent(secondaryDisplayId, m.action, m.downTime, m.ids, m.xs, m.ys)
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to inject secondary input on display $secondaryDisplayId", e)
                     }
@@ -2936,8 +2936,8 @@ class MirrorForegroundService : Service() {
         vdm.attachPrivilegedService(svc)
         vdm.createVirtualDisplay(currentWidth, currentHeight, computeVirtualDisplayDpi(currentWidth, currentHeight), surf)
         if (vdm.hasVirtualDisplay()) {
-            touchInjector?.setVirtualDisplayInjector { action, x, y, pointerId ->
-                vdm.injectInput(action, x, y, pointerId)
+            touchInjector?.setVirtualDisplayInjector { m ->
+                vdm.injectMotion(m)
             }
             restoreCurrentVdContent()
         }
@@ -3055,8 +3055,8 @@ class MirrorForegroundService : Service() {
                 vdm.createVirtualDisplay(actualWidth, actualHeight, actualDpi, actualSurface)
 
                 if (vdm.hasVirtualDisplay()) {
-                    touchInjector?.setVirtualDisplayInjector { action, x, y, pointerId ->
-                        vdm.injectInput(action, x, y, pointerId)
+                    touchInjector?.setVirtualDisplayInjector { m ->
+                        vdm.injectMotion(m)
                     }
                     // Harden Shizuku (fortify + install watchdog if needed) for WiFi-off survival
                     serviceScope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -3757,8 +3757,8 @@ class MirrorForegroundService : Service() {
                         false
                     }
                     if (swapped) {
-                        touchInjector?.setVirtualDisplayInjector { action, x, y, pointerId ->
-                            virtualDisplayManager?.injectInput(action, x, y, pointerId)
+                        touchInjector?.setVirtualDisplayInjector { m ->
+                            virtualDisplayManager?.injectMotion(m)
                         }
                         Log.i(TAG, "Swapped surface on primary VD $vdId at ${width}x${height}")
                     } else {
@@ -3766,8 +3766,8 @@ class MirrorForegroundService : Service() {
                         virtualDisplayManager?.releaseVirtualDisplay()
                         virtualDisplayManager?.createVirtualDisplay(width, height, dpi, surface)
                         if (virtualDisplayManager?.hasVirtualDisplay() == true) {
-                            touchInjector?.setVirtualDisplayInjector { action, x, y, pointerId ->
-                                virtualDisplayManager?.injectInput(action, x, y, pointerId)
+                            touchInjector?.setVirtualDisplayInjector { m ->
+                                virtualDisplayManager?.injectMotion(m)
                             }
                             restoreCurrentVdContent()
                         } else {
@@ -3778,8 +3778,8 @@ class MirrorForegroundService : Service() {
                     virtualDisplayManager?.releaseVirtualDisplay()
                     virtualDisplayManager?.createVirtualDisplay(width, height, dpi, surface)
                     if (virtualDisplayManager?.hasVirtualDisplay() == true) {
-                        touchInjector?.setVirtualDisplayInjector { action, x, y, pointerId ->
-                            virtualDisplayManager?.injectInput(action, x, y, pointerId)
+                        touchInjector?.setVirtualDisplayInjector { m ->
+                            virtualDisplayManager?.injectMotion(m)
                         }
                         restoreCurrentVdContent()
                     } else {
@@ -3787,8 +3787,8 @@ class MirrorForegroundService : Service() {
                         Log.w(TAG, "VD creation failed during rebuild — retrying once")
                         virtualDisplayManager?.createVirtualDisplay(width, height, dpi, surface)
                         if (virtualDisplayManager?.hasVirtualDisplay() == true) {
-                            touchInjector?.setVirtualDisplayInjector { action, x, y, pointerId ->
-                                virtualDisplayManager?.injectInput(action, x, y, pointerId)
+                            touchInjector?.setVirtualDisplayInjector { m ->
+                                virtualDisplayManager?.injectMotion(m)
                             }
                             restoreCurrentVdContent()
                         } else {

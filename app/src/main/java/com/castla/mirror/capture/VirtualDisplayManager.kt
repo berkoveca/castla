@@ -218,6 +218,18 @@ class VirtualDisplayManager {
     }
 
     /** Inject a touch event on the virtual display. */
+    /** Inject a complete touchscreen event built by [com.castla.mirror.input.TouchStream]. */
+    fun injectMotion(m: com.castla.mirror.input.TouchStream.Motion) {
+        val id = displayId
+        val svc = privilegedService
+        if (id < 0 || svc == null) return
+        try {
+            svc.injectMotionEvent(id, m.action, m.downTime, m.ids, m.xs, m.ys)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to inject motion on display $id", e)
+        }
+    }
+
     fun injectInput(action: Int, x: Float, y: Float, pointerId: Int) {
         if (displayId < 0) {
             Log.w(TAG, "injectInput skipped: displayId=$displayId")

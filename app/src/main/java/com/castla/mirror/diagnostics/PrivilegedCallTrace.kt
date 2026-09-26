@@ -39,7 +39,7 @@ object PrivilegedCallTrace {
 
     fun levelOf(method: String, args: Array<out Any?>?): Level = when {
         method in SILENT_METHODS -> Level.SILENT
-        method == "injectInput" -> Level.TOUCH
+        method == "injectInput" || method == "injectMotionEvent" -> Level.TOUCH
         method in RISKY_METHODS -> Level.RISKY
         method == "execCommand" -> commandLevel(args?.firstOrNull() as? String)
         else -> Level.NORMAL
@@ -97,9 +97,9 @@ object PrivilegedCallTrace {
 
         /** Returns a line to log, or null. Actions: 0 DOWN, 1 UP, 2 MOVE, 3 CANCEL, 5/6 POINTER_DOWN/UP. */
         @Synchronized
-        fun onTouch(displayId: Int, action: Int, x: Float, y: Float, pointerId: Int, nowMs: Long): String? {
-            val at = "(${Math.round(x)},${Math.round(y)})"
-            return when (action) {
+        fun onTouch(displayId: Int, action: Int, x: Float, y: Float, pointerId: Int, nowMs: Long, pointerCount: Int = 1): String? {
+            val at = "(${Math.round(x)},${Math.round(y)})" + if (pointerCount > 1) " n=$pointerCount" else ""
+            return when (action and 0xff) {
                 2 -> {
                     moves++
                     if (nowMs - windowStartMs >= summaryEveryMs) {
@@ -112,10 +112,10 @@ object PrivilegedCallTrace {
                 0, 5 -> {
                     moves = 0
                     windowStartMs = nowMs
-                    "touch ${if (action == 0) "DOWN" else "POINTER_DOWN"} d=$displayId id=$pointerId $at"
+                    "touch ${if (action and 0xff == 0) "DOWN" else "POINTER_DOWN"} d=$displayId id=$pointerId $at"
                 }
                 1, 6, 3 -> {
-                    val name = when (action) { 1 -> "UP"; 6 -> "POINTER_UP"; else -> "CANCEL" }
+                    val name = when (action and 0xff) { 1 -> "UP"; 6 -> "POINTER_UP"; else -> "CANCEL" }
                     val line = "touch $name d=$displayId id=$pointerId $at moves=$moves"
                     moves = 0
                     windowStartMs = nowMs

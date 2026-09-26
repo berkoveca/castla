@@ -34,6 +34,7 @@ class PrivilegedCallTraceTest {
         assertEquals(Level.SILENT, PrivilegedCallTrace.levelOf("isAlive", emptyArray()))
         assertEquals(Level.SILENT, PrivilegedCallTrace.levelOf("asBinder", emptyArray()))
         assertEquals(Level.TOUCH, PrivilegedCallTrace.levelOf("injectInput", emptyArray()))
+        assertEquals(Level.TOUCH, PrivilegedCallTrace.levelOf("injectMotionEvent", emptyArray()))
     }
 
     @Test
@@ -63,6 +64,13 @@ class PrivilegedCallTraceTest {
         assertNull(agg.onTouch(7, 2, 420f, 310f, 0, nowMs = 1100))
         assertNull(agg.onTouch(7, 2, 430f, 320f, 0, nowMs = 1200))
         assertEquals("touch UP d=7 id=0 (430,320) moves=2", agg.onTouch(7, 1, 430f, 320f, 0, nowMs = 1300))
+    }
+
+    @Test
+    fun `second finger and pointer count are shown`() {
+        val agg = PrivilegedCallTrace.TouchAggregator(summaryEveryMs = 5000)
+        agg.onTouch(7, 0, 1f, 1f, 0, nowMs = 0)
+        assertEquals("touch POINTER_DOWN d=7 id=1 (5,5) n=2", agg.onTouch(7, 5 or (1 shl 8), 5f, 5f, 1, nowMs = 10, pointerCount = 2))
     }
 
     @Test

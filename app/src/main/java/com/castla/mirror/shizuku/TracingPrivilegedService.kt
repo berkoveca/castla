@@ -29,7 +29,7 @@ object TracingPrivilegedService {
             val name = method.name
             val level = PrivilegedCallTrace.levelOf(name, args)
             if (level == Level.SILENT) return@newProxyInstance invoke(method, target, args)
-            if (level == Level.TOUCH) traceTouch(args)
+            if (level == Level.TOUCH) traceTouch(name, args)
 
             val n = seq.incrementAndGet()
             val call = if (level == Level.TOUCH) "" else PrivilegedCallTrace.describeCall(name, args)
@@ -57,14 +57,23 @@ object TracingPrivilegedService {
         } as IPrivilegedService
     }
 
-    private fun traceTouch(args: Array<out Any?>?) {
+    private fun traceTouch(method: String, args: Array<out Any?>?) {
         try {
             val a = args ?: return
-            val line = touch.onTouch(
-                displayId = a[0] as Int, action = a[1] as Int,
-                x = a[2] as Float, y = a[3] as Float, pointerId = a[4] as Int,
-                nowMs = SystemClock.elapsedRealtime()
-            ) ?: return
+            val line = if (method == "injectMotionEvent") {
+                // (displayId, action, downTime, ids, xs, ys); the acting pointer is at the action index
+                val action = a[1] as Int
+                val ids = a[3] as IntArray; val xs = a[4] as FloatArray; val ys = a[5] as FloatArray
+                val i = ((action shr 8) and 0xff).coerceIn(0, (ids.size - 1).coerceAtLeast(0))
+                if (ids.isEmpty()) return
+                touch.onTouch(a[0] as Int, action, xs[i], ys[i], ids[i], SystemClock.elapsedRealtime(), ids.size)
+            } else {
+                touch.onTouch(
+                    displayId = a[0] as Int, action = a[1] as Int,
+                    x = a[2] as Float, y = a[3] as Float, pointerId = a[4] as Int,
+                    nowMs = SystemClock.elapsedRealtime()
+                )
+            } ?: return
             FileLogger.i(TAG, line)
         } catch (_: Throwable) { }
     }

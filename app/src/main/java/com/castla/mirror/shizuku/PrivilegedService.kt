@@ -376,6 +376,51 @@ class PrivilegedService : IPrivilegedService.Stub() {
         }
     }
 
+    private val motionProps = Array(10) { MotionEvent.PointerProperties() }
+    private val motionCoords = Array(10) { MotionEvent.PointerCoords() }
+
+    /**
+     * Real-touchscreen-shaped injection (see TouchStream): stable downTime, all
+     * pointers per event, finger tool type, pressure 0 on the lifting event.
+     */
+    @Synchronized
+    override fun injectMotionEvent(displayId: Int, action: Int, downTime: Long, ids: IntArray, xs: FloatArray, ys: FloatArray) {
+        val count = minOf(ids.size, xs.size, ys.size, motionProps.size)
+        if (count == 0) return
+        val masked = action and MotionEvent.ACTION_MASK
+        val lifting = masked == MotionEvent.ACTION_UP || masked == MotionEvent.ACTION_CANCEL
+        for (i in 0 until count) {
+            motionProps[i].clear()
+            motionProps[i].id = ids[i]
+            motionProps[i].toolType = MotionEvent.TOOL_TYPE_FINGER
+            motionCoords[i].clear()
+            motionCoords[i].x = xs[i]
+            motionCoords[i].y = ys[i]
+            motionCoords[i].pressure = if (lifting) 0f else 1f
+            motionCoords[i].size = 1f
+        }
+        val now = SystemClock.uptimeMillis()
+        val event = MotionEvent.obtain(
+            downTime.coerceAtMost(now), now, action, count,
+            motionProps, motionCoords,
+            0, 0, 1.0f, 1.0f,
+            0, 0,
+            InputDevice.SOURCE_TOUCHSCREEN,
+            0
+        )
+        try {
+            if (setDisplayIdMethod == null) {
+                setDisplayIdMethod = MotionEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType)
+            }
+            setDisplayIdMethod?.invoke(event, displayId)
+            injectMethod?.invoke(inputManagerInstance, event, 0)
+        } catch (e: Exception) {
+            Log.e(TAG, "Motion injection failed on display $displayId", e)
+        } finally {
+            event.recycle()
+        }
+    }
+
     override fun execCommand(command: String): String {
         val homeDisplay = HomeKeyGuard.homeDisplayOf(command)
         return if (homeDisplay != null) pressHomeGuarded(homeDisplay, command) else runShell(command)

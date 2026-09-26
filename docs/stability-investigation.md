@@ -248,3 +248,29 @@ that just got HOME waits 1 s (`HomeKeyGuard`, unit-tested). Post-mortem now also
 Overload vs. bug: an overloaded/hung system_server is killed by its Watchdog (`system_server_watchdog`
 in DropBox, `Watchdog` lines in the crash/system log). A `SIGABRT` with an abort message is a
 deliberate abort on a failed check — a bug path, usually triggered by the last system call.
+
+## Phone soft-reboot: InputDispatcher abort on injected touch (confirmed)
+
+Crash buffer after two field soft-reboots (10:17 and 10:52, 2026-09-26):
+
+```
+Fatal signal 6 (SIGABRT) in tid (InputDispatcher), pid (system_server)
+#01 libinputflinger.so InputTarget::addPointers(BitSet32, Transform)
+#02 InputDispatcher::addWindowTargetLocked
+#03 InputDispatcher::findTouchedWindowTargetsLocked
+#04 InputDispatcher::dispatchMotionLocked
+```
+
+Both times the abort came milliseconds after Castla injected an `ACTION_DOWN` (SysCall trace:
+`touch DOWN d=11 id=17` at 10:17:29.592, fatal signal at 10:17:29.595); the next injection then
+blocked ~2 s while system_server died. Load, memory and temperature were normal.
+
+The injected stream differed from a real touchscreen in everything that code path checks:
+pointer ids climbed per tap (0…31) instead of restarting at 0, `downTime` was "now" on every
+event, additional fingers arrived as unrelated single-pointer `ACTION_DOWN`s, and lost UPs were
+covered with synthetic downs.
+
+**Status: fixed.** `TouchStream` (unit-tested) produces hardware/scrcpy-shaped events — lowest
+free pointer id (single tap = id 0), all active pointers per event with `ACTION_POINTER_DOWN/UP`
++ index, one `downTime` per gesture, unknown moves/ups dropped, stale gestures cancelled — and
+`PrivilegedService.injectMotionEvent` injects them with finger tool type and pressure 0 on lift.

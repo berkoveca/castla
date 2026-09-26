@@ -126,4 +126,11 @@ interface IPrivilegedService {
      * Stop the system audio capture started by startSystemAudioCapture().
      */
     void stopSystemAudioCapture() = 21;
+
+    /**
+     * Inject one complete touchscreen MotionEvent (all active pointers) on a display.
+     * action includes the pointer index for POINTER_DOWN/UP; downTime is the
+     * gesture's DOWN time (SystemClock.uptimeMillis base). See TouchStream.
+     */
+    void injectMotionEvent(int displayId, int action, long downTime, in int[] ids, in float[] xs, in float[] ys) = 22;
 }

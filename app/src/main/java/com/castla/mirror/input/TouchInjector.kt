@@ -17,7 +17,9 @@ class TouchInjector(private var displayWidth: Int, private var displayHeight: In
     private var injectMethod: java.lang.reflect.Method? = null
     
     // Callback to let VirtualDisplayManager handle injection (since it has the display ID)
-    private var virtualDisplayInjector: ((Int, Float, Float, Int) -> Unit)? = null
+    private var virtualDisplayInjector: ((TouchStream.Motion) -> Unit)? = null
+    /** Real-touchscreen-shaped event stream for the virtual display (see [TouchStream]). */
+    private val stream = TouchStream()
 
     private data class PointerState(var x: Float, var y: Float)
     private val activePointers = mutableMapOf<Int, PointerState>()
@@ -34,13 +36,17 @@ class TouchInjector(private var displayWidth: Int, private var displayHeight: In
     fun updateDimensions(width: Int, height: Int) {
         displayWidth = width
         displayHeight = height
+        // The display a gesture started on is being resized/replaced: forget it
+        // (sending CANCEL to a display that may be gone is not worth the risk).
+        stream.reset()
         activePointers.clear()
         pointerOrder.clear()
         Log.i(TAG, "TouchInjector dimensions updated: ${width}x${height}")
     }
 
     /** Set callback to inject touch directly onto the VirtualDisplay via Shizuku */
-    fun setVirtualDisplayInjector(injector: ((Int, Float, Float, Int) -> Unit)?) {
+    fun setVirtualDisplayInjector(injector: ((TouchStream.Motion) -> Unit)?) {
+        stream.reset()
         virtualDisplayInjector = injector
     }
 
@@ -60,6 +66,13 @@ class TouchInjector(private var displayWidth: Int, private var displayHeight: In
         val absX = event.x * displayWidth
         val absY = event.y * displayHeight
         val pointerId = event.pointerId
+
+        virtualDisplayInjector?.let { inject ->
+            for (m in stream.onEvent(event.action, pointerId, absX, absY, SystemClock.uptimeMillis())) {
+                inject(m)
+            }
+            return
+        }
 
         val beforeCount = activePointers.size
 
@@ -99,24 +112,6 @@ class TouchInjector(private var displayWidth: Int, private var displayHeight: In
         val afterCount = activePointers.size
         if (afterCount == 0) return
 
-        // If we have a virtual display injector, use it (Shizuku + display ID)
-        if (virtualDisplayInjector != null) {
-            val actionCode = when (event.action) {
-                "down" -> MotionEvent.ACTION_DOWN
-                "up" -> MotionEvent.ACTION_UP
-                "move" -> MotionEvent.ACTION_MOVE
-                else -> -1
-            }
-            if (actionCode >= 0) {
-                virtualDisplayInjector?.invoke(actionCode, absX, absY, pointerId)
-            }
-            // Remove pointer AFTER injection
-            if (event.action == "up") {
-                activePointers.remove(pointerId)
-                pointerOrder.remove(pointerId)
-            }
-            return
-        }
 
         // Fallback: MediaProjection screen mirroring (main display)
         injectViaShizuku(event, beforeCount, afterCount, pointerId)
