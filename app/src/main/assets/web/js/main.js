@@ -133,6 +133,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     const qualityPopup = document.getElementById('quality-popup');
     // Declared up front: settingsState messages can arrive before the menu code below runs.
     let qualityState = null;
+    const LAUNCHER_GROUPS = [
+        { key: 'FAVORITES', title: '★ Favorites', color: '#FFD54F' },
+        { key: 'RECENT', title: 'Recent', color: '#64B5F6' },
+        { key: 'NAVIGATION', title: 'Navigation', color: '#4CAF50' },
+        { key: 'MUSIC', title: 'Music', color: '#9C27B0' },
+        { key: 'VIDEO', title: 'Video', color: '#FF5722' },
+        { key: 'SOCIAL', title: 'Social', color: '#03A9F4' },
+        { key: 'GAMES', title: 'Games', color: '#FFC107' },
+        { key: 'OTHER', title: 'Apps', color: '#9E9E9E' },
+    ];
+    const RECENT_MAX = 8;
+    let launcherApps = [];
+    let launcherQuery = '';
+    let launcherGroup = storageGet('castla_launcher_group') || 'ALL';
     const QUALITY_ROWS = [
         { key: 'resolution', title: 'Resolution', options: [
             ['AUTO', 'Auto'], ['RES_720', '720'], ['RES_800', '800'], ['RES_960', '960'],
@@ -1508,68 +1522,182 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    function renderLauncherApps(apps) {
+    // ── App grid: search, groups, favorites, recent ──
+    // Favorites / recent / last group are stored in this car browser.
+
+    function storageGet(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }
+    function storageSet(key, value) { try { localStorage.setItem(key, value); } catch (_) {} }
+    function storageList(key) { try { return JSON.parse(storageGet(key) || '[]') || []; } catch (_) { return []; } }
+
+    function favoriteSet() { return new Set(storageList('castla_favorites')); }
+    function toggleFavorite(pkg) {
+        const favs = storageList('castla_favorites');
+        const i = favs.indexOf(pkg);
+        if (i >= 0) favs.splice(i, 1); else favs.push(pkg);
+        storageSet('castla_favorites', JSON.stringify(favs));
+        showAutoTierToast(i >= 0 ? 'Removed from Favorites' : 'Added to Favorites');
+        renderLauncherResults();
+    }
+    function recordRecentApp(pkg) {
+        const recent = storageList('castla_recent').filter(p => p !== pkg);
+        recent.unshift(pkg);
+        storageSet('castla_recent', JSON.stringify(recent.slice(0, RECENT_MAX)));
+    }
+
+    function normalizeForSearch(text) {
+        return String(text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    }
+
+    /** Apps per group, each group sorted by name; favorites/recent keep their own order. */
+    function groupLauncherApps(apps) {
+        const byPkg = new Map(apps.map(a => [a.packageName, a]));
+        const sorted = apps.slice().sort((a, b) => String(a.label).localeCompare(String(b.label)));
+        const groups = {};
+        LAUNCHER_GROUPS.forEach(g => { groups[g.key] = []; });
+        storageList('castla_favorites').forEach(p => { if (byPkg.has(p)) groups.FAVORITES.push(byPkg.get(p)); });
+        storageList('castla_recent').forEach(p => { if (byPkg.has(p)) groups.RECENT.push(byPkg.get(p)); });
+        sorted.forEach(app => (groups[app.category] || groups.OTHER).push(app));
+        return groups;
+    }
+
+    function buildLauncherToolbar() {
+        if (document.getElementById('launcher-toolbar')) return;
+        const toolbar = document.createElement('div');
+        toolbar.id = 'launcher-toolbar';
+        const search = document.createElement('input');
+        search.id = 'app-search';
+        search.type = 'search';
+        search.placeholder = 'Search apps';
+        search.autocomplete = 'off';
+        search.addEventListener('input', () => { launcherQuery = search.value; renderLauncherResults(); });
+        const chips = document.createElement('div');
+        chips.id = 'launcher-chips';
+        const hint = document.createElement('div');
+        hint.className = 'launcher-hint';
+        hint.textContent = 'Tip: press and hold an app to add it to Favorites';
+        toolbar.appendChild(search);
+        toolbar.appendChild(chips);
+        toolbar.appendChild(hint);
+        const results = document.createElement('div');
+        results.id = 'launcher-results';
         launcherContent.innerHTML = '';
-        const grouped = {
-            'NAVIGATION': { title: 'Navigation', color: '#4CAF50', items: [] },
-            'VIDEO': { title: 'Video', color: '#FF5722', items: [] },
-            'MUSIC': { title: 'Music', color: '#9C27B0', items: [] },
-            'OTHER': { title: 'Apps', color: '#9E9E9E', items: [] }
-        };
+        launcherContent.appendChild(toolbar);
+        launcherContent.appendChild(results);
+    }
 
-        apps.forEach(app => {
-            if (grouped[app.category]) grouped[app.category].items.push(app);
-            else grouped['OTHER'].items.push(app);
-        });
-
-        Object.keys(grouped).forEach(key => {
-            const group = grouped[key];
-            if (group.items.length === 0) return;
-
-            const section = document.createElement('div');
-            section.className = 'category-section';
-
-            const header = document.createElement('div');
-            header.className = 'category-header';
-            const bar = document.createElement('div');
-            bar.className = 'category-bar';
-            bar.style.backgroundColor = group.color;
-            const title = document.createElement('div');
-            title.className = 'category-title';
-            title.textContent = group.title;
-
-            header.appendChild(bar);
-            header.appendChild(title);
-            section.appendChild(header);
-
-            const grid = document.createElement('div');
-            grid.className = 'app-grid';
-
-            group.items.forEach(app => {
-                const cell = document.createElement('div');
-                cell.className = 'app-cell';
-
-                const icon = document.createElement('img');
-                icon.className = 'app-icon';
-                icon.src = `/api/icon?pkg=${app.packageName}`;
-                icon.loading = 'lazy';
-                cell.appendChild(icon);
-
-                const label = document.createElement('div');
-                label.className = 'app-label';
-                label.textContent = app.label;
-                cell.appendChild(label);
-
-                cell.addEventListener('click', () => {
-                    launchApp(app, false);
-                });
-
-                grid.appendChild(cell);
+    function renderLauncherChips(groups) {
+        const chips = document.getElementById('launcher-chips');
+        if (!chips) return;
+        chips.innerHTML = '';
+        const options = [{ key: 'ALL', title: 'All' }].concat(
+            LAUNCHER_GROUPS.filter(g => groups[g.key].length > 0));
+        if (!options.some(o => o.key === launcherGroup)) launcherGroup = 'ALL';
+        options.forEach(opt => {
+            const chip = document.createElement('button');
+            chip.className = 'launcher-chip' + (opt.key === launcherGroup ? ' active' : '');
+            chip.textContent = opt.key === 'ALL' ? 'All' : `${opt.title} ${groups[opt.key].length}`;
+            chip.addEventListener('click', () => {
+                launcherGroup = opt.key;
+                storageSet('castla_launcher_group', opt.key);
+                renderLauncherResults();
             });
-
-            section.appendChild(grid);
-            launcherContent.appendChild(section);
+            chips.appendChild(chip);
         });
+    }
+
+    function makeAppCell(app, favorites) {
+        const cell = document.createElement('div');
+        cell.className = 'app-cell';
+        const icon = document.createElement('img');
+        icon.className = 'app-icon';
+        icon.src = `/api/icon?pkg=${app.packageName}`;
+        icon.loading = 'lazy';
+        cell.appendChild(icon);
+        const label = document.createElement('div');
+        label.className = 'app-label';
+        label.textContent = app.label;
+        cell.appendChild(label);
+        if (favorites.has(app.packageName)) {
+            const star = document.createElement('div');
+            star.className = 'app-fav-star';
+            star.textContent = '★';
+            cell.appendChild(star);
+        }
+        // Tap launches; press-and-hold toggles Favorite.
+        let holdTimer = null, held = false, startX = 0, startY = 0;
+        const cancelHold = () => { if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; } };
+        cell.addEventListener('pointerdown', (e) => {
+            held = false; startX = e.clientX; startY = e.clientY;
+            cancelHold();
+            holdTimer = setTimeout(() => { held = true; holdTimer = null; toggleFavorite(app.packageName); }, 600);
+        });
+        cell.addEventListener('pointermove', (e) => {
+            if (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10) cancelHold();
+        });
+        cell.addEventListener('pointerup', cancelHold);
+        cell.addEventListener('pointercancel', cancelHold);
+        cell.addEventListener('contextmenu', (e) => e.preventDefault());
+        cell.addEventListener('click', () => {
+            if (held) { held = false; return; }
+            launchApp(app, false);
+        });
+        return cell;
+    }
+
+    function appendSection(container, title, color, apps, favorites) {
+        const section = document.createElement('div');
+        section.className = 'category-section';
+        const header = document.createElement('div');
+        header.className = 'category-header';
+        const bar = document.createElement('div');
+        bar.className = 'category-bar';
+        bar.style.backgroundColor = color;
+        const titleEl = document.createElement('div');
+        titleEl.className = 'category-title';
+        titleEl.textContent = title;
+        header.appendChild(bar);
+        header.appendChild(titleEl);
+        section.appendChild(header);
+        const grid = document.createElement('div');
+        grid.className = 'app-grid';
+        apps.forEach(app => grid.appendChild(makeAppCell(app, favorites)));
+        section.appendChild(grid);
+        container.appendChild(section);
+    }
+
+    function renderLauncherResults() {
+        const results = document.getElementById('launcher-results');
+        if (!results) return;
+        const favorites = favoriteSet();
+        const groups = groupLauncherApps(launcherApps);
+        renderLauncherChips(groups);
+        results.innerHTML = '';
+        const q = normalizeForSearch(launcherQuery.trim());
+        if (q) {
+            const matches = launcherApps
+                .filter(a => normalizeForSearch(a.label).includes(q) || normalizeForSearch(a.packageName).includes(q))
+                .sort((a, b) => String(a.label).localeCompare(String(b.label)));
+            if (matches.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'launcher-empty';
+                empty.textContent = `No apps match "${launcherQuery.trim()}"`;
+                results.appendChild(empty);
+            } else {
+                appendSection(results, `Results · ${matches.length}`, '#64B5F6', matches, favorites);
+            }
+            return;
+        }
+        LAUNCHER_GROUPS.forEach(g => {
+            if (launcherGroup !== 'ALL' && launcherGroup !== g.key) return;
+            if (groups[g.key].length === 0) return;
+            appendSection(results, g.title, g.color, groups[g.key], favorites);
+        });
+    }
+
+    function renderLauncherApps(apps) {
+        launcherApps = apps || [];
+        buildLauncherToolbar();
+        renderLauncherResults();
 
         hideLauncherNotice();
         launcherContent.style.display = 'block';
@@ -1603,6 +1731,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         disableBrowserSplit();
+        recordRecentApp(pkgName);
         currentPrimaryApp = app;
         isLauncherMode = false;
         webLauncher.classList.add('hidden');

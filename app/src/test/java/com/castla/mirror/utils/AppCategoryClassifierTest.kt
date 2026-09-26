@@ -56,8 +56,32 @@ class AppCategoryClassifierTest {
     @Test
     fun `test classify other apps`() {
         assertEquals("OTHER", AppCategoryClassifier.classify("com.android.settings", "Settings"))
-        assertEquals("OTHER", AppCategoryClassifier.classify("com.kakao.talk", "KakaoTalk"))
+        assertEquals("SOCIAL", AppCategoryClassifier.classify("com.kakao.talk", "KakaoTalk")) // messenger: Social group
         assertEquals("OTHER", AppCategoryClassifier.classify("com.android.chrome", "Chrome"))
         assertEquals("OTHER", AppCategoryClassifier.classify("com.google.android.gm", "Gmail"))
+    }
+
+    @Test
+    fun `android app category fills in when no keyword matches`() {
+        // ApplicationInfo.CATEGORY_*: GAME=0 AUDIO=1 VIDEO=2 IMAGE=3 SOCIAL=4 NEWS=5 MAPS=6 PRODUCTIVITY=7
+        assertEquals("SOCIAL", AppCategoryClassifier.classify("com.example.chat", "Chat", 4))
+        assertEquals("GAMES", AppCategoryClassifier.classify("com.king.candy", "Candy", 0))
+        assertEquals("NAVIGATION", AppCategoryClassifier.classify("com.example.ev", "EV charge", 6))
+        assertEquals("MUSIC", AppCategoryClassifier.classify("com.example.pod", "Pods", 1))
+        assertEquals("VIDEO", AppCategoryClassifier.classify("com.example.clips", "Clips", 2))
+        assertEquals("OTHER", AppCategoryClassifier.classify("com.example.tool", "Tool", 7))
+        assertEquals("OTHER", AppCategoryClassifier.classify("com.example.tool", "Tool", -1))
+    }
+
+    @Test
+    fun `well-known messengers are social even without a declared category`() {
+        assertEquals("SOCIAL", AppCategoryClassifier.classify("com.viber.voip", "Viber"))
+        assertEquals("SOCIAL", AppCategoryClassifier.classify("org.telegram.messenger", "Telegram"))
+        assertEquals("SOCIAL", AppCategoryClassifier.classify("com.facebook.orca", "Messenger"))
+    }
+
+    @Test
+    fun `keywords still win over the declared category`() {
+        assertEquals("NAVIGATION", AppCategoryClassifier.classify("com.waze", "Waze", 4))
     }
 }

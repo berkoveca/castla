@@ -1,7 +1,19 @@
 package com.castla.mirror.utils
 
 object AppCategoryClassifier {
-    fun classify(pkg: String, label: String): String {
+    /** Messengers / social apps that often declare no category. */
+    private val socialPkgs = setOf(
+        "com.whatsapp", "com.viber.voip", "org.telegram.messenger", "org.thunderdog.challegram",
+        "com.facebook.orca", "com.facebook.katana", "com.instagram.android", "com.snapchat.android",
+        "com.discord", "com.zhiliaoapp.musically", "com.twitter.android", "com.kakao.talk",
+        "jp.naver.line.android", "com.skype.raider", "com.microsoft.teams", "org.thoughtcrime.securesms"
+    )
+
+    /**
+     * [androidCategory] is ApplicationInfo.category (-1 = undefined): used when no
+     * package/label keyword matches, so the "Apps" bucket is not one huge list.
+     */
+    fun classify(pkg: String, label: String, androidCategory: Int = -1): String {
         val p = pkg.lowercase()
         val l = label.lowercase()
         
@@ -13,6 +25,15 @@ object AppCategoryClassifier {
         if (videoPkgs.any { p.startsWith(it) } || p.contains("video") || p.contains("movie") || p.contains("ott") || p.contains("tv") || l.contains("동영상") || l.contains("영화")) return "VIDEO"
         if (musicPkgs.any { p.startsWith(it) } || p.contains("music") || p.contains("audio") || p.contains("radio") || l.contains("음악") || l.contains("라디오")) return "MUSIC"
         
-        return "OTHER"
+        if (socialPkgs.any { p.startsWith(it) }) return "SOCIAL"
+
+        return when (androidCategory) {
+            0 -> "GAMES"        // CATEGORY_GAME
+            1 -> "MUSIC"        // CATEGORY_AUDIO
+            2 -> "VIDEO"        // CATEGORY_VIDEO
+            4 -> "SOCIAL"       // CATEGORY_SOCIAL
+            6 -> "NAVIGATION"   // CATEGORY_MAPS
+            else -> "OTHER"
+        }
     }
 }

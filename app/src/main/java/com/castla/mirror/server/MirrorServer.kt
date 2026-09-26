@@ -799,7 +799,7 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
                         put("className", className)
                         put("componentName", componentName)
                         put("label", label)
-                        put("category", AppCategoryClassifier.classify(pkgName, label))
+                        put("category", AppCategoryClassifier.classify(pkgName, label, ri.activityInfo.applicationInfo?.category ?: -1))
                         
                         // Check if it's a DRM-restricted OTT app
                         val ottTarget = OttCatalog.resolve(pkgName)

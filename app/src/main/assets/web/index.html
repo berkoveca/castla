@@ -84,6 +84,28 @@
             gap: 16px;
         }
 
+        /* App grid toolbar: search + group chips */
+        #launcher-toolbar {
+            position: sticky; top: -30px; z-index: 5;
+            background: #0F0F1A; padding: 6px 0 14px; margin-bottom: 8px;
+        }
+        #app-search {
+            width: 100%; box-sizing: border-box; height: 52px; padding: 0 18px;
+            border-radius: 26px; border: 1px solid rgba(255,255,255,0.15);
+            background: rgba(255,255,255,0.06); color: #fff; font-size: 18px; outline: none;
+        }
+        #app-search:focus { border-color: #64B5F6; }
+        #launcher-chips { display: flex; gap: 8px; overflow-x: auto; margin-top: 12px; padding-bottom: 2px; }
+        .launcher-chip {
+            flex: 0 0 auto; height: 40px; padding: 0 16px; border-radius: 20px; cursor: pointer;
+            border: 1px solid rgba(255,255,255,0.15); background: transparent; color: #ddd; font-size: 15px;
+        }
+        .launcher-chip.active { border-color: #64B5F6; background: rgba(100,181,246,0.25); color: #64B5F6; font-weight: 600; }
+        .launcher-empty { color: rgba(255,255,255,0.5); font-size: 16px; padding: 24px 4px; }
+        .app-cell { position: relative; }
+        .app-fav-star { position: absolute; top: 6px; right: 14px; color: #FFD54F; font-size: 18px; text-shadow: 0 1px 3px #000; }
+        .launcher-hint { color: rgba(255,255,255,0.35); font-size: 12px; margin-top: 8px; }
+
         .app-cell {
             display: flex;
             flex-direction: column;
