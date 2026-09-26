@@ -81,22 +81,34 @@ class TouchInjectorTest {
 
     @Test
     fun `virtual display injector receives routed events`() {
-        val received = mutableListOf<List<Any>>()
-        injector.setVirtualDisplayInjector { action, x, y, pointerId ->
-            received.add(listOf(action, x, y, pointerId))
-        }
+        val received = mutableListOf<TouchStream.Motion>()
+        injector.setVirtualDisplayInjector { m -> received.add(m) }
 
-        injector.onTouchEvent(TouchEvent("down", 0.5f, 0.25f, 0))
+        injector.onTouchEvent(TouchEvent("down", 0.5f, 0.25f, 7))
         assertEquals(1, received.size)
+        assertEquals(TouchStream.ACTION_DOWN, received[0].action)
+        // A single tap is pointer id 0 whatever id the page used
+        assertArrayEquals(intArrayOf(0), received[0].ids)
         // Verify coordinates were scaled: 0.5 * 1080 = 540, 0.25 * 1920 = 480
-        assertEquals(540f, received[0][1] as Float, 0.1f)
-        assertEquals(480f, received[0][2] as Float, 0.1f)
+        assertEquals(540f, received[0].xs[0], 0.1f)
+        assertEquals(480f, received[0].ys[0], 0.1f)
+    }
+
+    @Test
+    fun `second finger is routed as one multi-pointer event`() {
+        val received = mutableListOf<TouchStream.Motion>()
+        injector.setVirtualDisplayInjector { m -> received.add(m) }
+        injector.onTouchEvent(TouchEvent("down", 0.3f, 0.3f, 4))
+        injector.onTouchEvent(TouchEvent("down", 0.7f, 0.7f, 5))
+        assertEquals(2, received.size)
+        assertEquals(2, received[1].ids.size)
+        assertEquals(TouchStream.ACTION_POINTER_DOWN, received[1].action and 0xff)
     }
 
     @Test
     fun `clearing virtual display injector falls back to normal injection`() {
         val vdReceived = mutableListOf<Any>()
-        injector.setVirtualDisplayInjector { _, _, _, _ -> vdReceived.add(true) }
+        injector.setVirtualDisplayInjector { _ -> vdReceived.add(true) }
         injector.onTouchEvent(TouchEvent("down", 0.5f, 0.5f, 0))
         assertEquals(1, vdReceived.size)
 
