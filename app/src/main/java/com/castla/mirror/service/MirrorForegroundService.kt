@@ -1,5 +1,6 @@
 package com.castla.mirror.service
 
+import com.castla.mirror.policy.ViewportChangePolicy
 import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
@@ -254,6 +255,10 @@ class MirrorForegroundService : Service() {
     }
     private var serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob() + serviceExceptionHandler)
     private var resizeJob: Job? = null
+    /** Viewport the stream was last rebuilt for (null = none yet this VD session). */
+    @Volatile private var appliedViewport: ViewportChangePolicy.Viewport? = null
+    @Volatile private var appliedLayoutMode: String? = null
+    @Volatile private var lastViewportRebuildAtMs = 0L
     private var pendingBrowserDisconnectJob: Job? = null
     private var browserConnected = false
     private var currentVdApp: String = "com.android.settings" // what's running on main VD
@@ -1436,7 +1441,7 @@ class MirrorForegroundService : Service() {
                             onSecondaryViewportChange(w, h)
                         }
                     } else {
-                        onViewportChange(w, h, dpr)
+                        onViewportChange(w, h, dpr, layoutMode)
                     }
                 }
                 server.setTextInputListener { text -> injectText(text) }
@@ -3217,6 +3222,8 @@ class MirrorForegroundService : Service() {
      * disconnect/reconnect and pipeline rebuilds.
      */
     private fun tearDownVdSession(reason: String) {
+        appliedViewport = null
+        appliedLayoutMode = null
         Log.i(TAG, "Tearing down VD session: $reason")
         FileLogger.i(TAG, "Tearing down VD session: $reason")
         try { touchInjector?.setVirtualDisplayInjector(null) } catch (_: Exception) {}
@@ -3563,11 +3570,36 @@ class MirrorForegroundService : Service() {
         }
     }
 
-    private fun onViewportChange(width: Int, height: Int, dpr: Float = 1f) {
-        requestedViewport = RequestedViewport(width, height, dpr)
-        FileLogger.i(TAG, "Viewport from browser: ${width}x$height css px, dpr=$dpr")
+    private fun onViewportChange(width: Int, height: Int, dpr: Float = 1f, layoutMode: String? = null) {
+        val requested = ViewportChangePolicy.Viewport(width, height)
+        // A split/unsplit is a deliberate user action: apply it at once. Everything
+        // else goes through the policy — the Tesla keyboard and quick size flips used
+        // to destroy/recreate the display twice in 2 s and took system_server down.
+        val layoutChanged = layoutMode != null && appliedLayoutMode != null && layoutMode != appliedLayoutMode
+        val decision = if (layoutChanged) ViewportChangePolicy.Decision.APPLY_NOW
+            else ViewportChangePolicy.decide(appliedViewport, requested)
+        FileLogger.i(TAG, "Viewport from browser: ${width}x$height css px, dpr=$dpr layout=${layoutMode ?: "-"} → $decision" +
+            (appliedViewport?.let { " (applied ${it.width}x${it.height})" } ?: ""))
+        if (decision == ViewportChangePolicy.Decision.IGNORE) {
+            // Also drops a pending change that turned out to be a blip.
+            if (resizeJob?.isActive == true) FileLogger.i(TAG, "Pending viewport change cancelled")
+            resizeJob?.cancel()
+            return
+        }
         resizeJob?.cancel()
         resizeJob = serviceScope.launch {
+            if (decision == ViewportChangePolicy.Decision.DEBOUNCE) {
+                kotlinx.coroutines.delay(ViewportChangePolicy.STABLE_MS)
+                val wait = ViewportChangePolicy.delayBeforeRebuild(lastViewportRebuildAtMs, android.os.SystemClock.elapsedRealtime())
+                if (wait > 0) {
+                    FileLogger.i(TAG, "Viewport rebuild rate-limited: waiting ${wait}ms")
+                    kotlinx.coroutines.delay(wait)
+                }
+            }
+            requestedViewport = RequestedViewport(width, height, dpr)
+            appliedViewport = requested
+            if (layoutMode != null) appliedLayoutMode = layoutMode
+            lastViewportRebuildAtMs = android.os.SystemClock.elapsedRealtime()
             rebuildPipeline(width, height, dpr = dpr)
         }
     }
