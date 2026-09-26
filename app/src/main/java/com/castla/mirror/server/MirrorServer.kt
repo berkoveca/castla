@@ -8,6 +8,7 @@ import fi.iki.elonen.NanoWSD.WebSocket
 import org.json.JSONObject
 import com.castla.mirror.diagnostics.DiagnosticEvent
 import com.castla.mirror.diagnostics.DiagnosticSanitizer
+import com.castla.mirror.diagnostics.FileLogger
 import com.castla.mirror.diagnostics.MirrorDiagnostics
 import com.castla.mirror.network.ReachableIp
 import com.castla.mirror.network.TunnelSecurityConfig
@@ -488,6 +489,9 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
             val cookieValue = parseCookie(handshake.headers["cookie"], COOKIE_AUTH)
             if (!TunnelSecurityConfig.isValidSession(context, config, cookieValue)) {
                 Log.i(TAG, "Rejecting WebSocket handshake: missing/invalid auth cookie")
+                FileLogger.w("Auth", "REJECTED live connection ${handshake.uri} (no valid login) " +
+                    "src=${DiagnosticSanitizer.maskIp(handshake.remoteIpAddress)} " +
+                    "ua=${DiagnosticSanitizer.safeMessage(handshake.headers["user-agent"] ?: "<none>")}")
                 throw NanoWSD.WebSocketException(
                     NanoWSD.WebSocketFrame.CloseCode.NormalClosure,
                     "Unauthorized"
@@ -496,6 +500,12 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         }
 
         val uri = handshake.uri
+        if (uri.startsWith("/ws/control")) {
+            // One line per viewer session: who is actually connected (and so can see and control the phone).
+            FileLogger.i("Auth", "live connection accepted (${if (config.authEnabled && config.authPassword.isNotEmpty()) "logged in" else "NO PASSWORD SET"}) " +
+                "src=${DiagnosticSanitizer.maskIp(handshake.remoteIpAddress)} " +
+                "ua=${DiagnosticSanitizer.safeMessage(handshake.headers["user-agent"] ?: "<none>")}", durable = true)
+        }
         val channel = handshake.parameters["channel"]?.firstOrNull()
             ?: if (uri.contains("secondary")) "secondary" else "primary"
 
@@ -576,6 +586,8 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         if (config.authPassword.isNotEmpty() && submitted == config.authPassword) {
             val token = TunnelSecurityConfig.sessionToken(context, config.authPassword)
             Log.i(TAG, "Auth success from ${session.remoteIpAddress}")
+            FileLogger.w("Auth", "LOGIN OK src=${DiagnosticSanitizer.maskIp(session.remoteIpAddress)} " +
+                "ua=${DiagnosticSanitizer.safeMessage(session.headers["user-agent"] ?: "<none>")}")
             val resp = newFixedLengthResponse(
                 Response.Status.REDIRECT,
                 "text/html",
@@ -588,6 +600,8 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
             return resp
         }
         Log.w(TAG, "Auth failed from ${session.remoteIpAddress}")
+        FileLogger.w("Auth", "LOGIN FAILED (wrong password) src=${DiagnosticSanitizer.maskIp(session.remoteIpAddress)} " +
+            "ua=${DiagnosticSanitizer.safeMessage(session.headers["user-agent"] ?: "<none>")}")
         return serveLoginPage(showError = true)
     }
 
