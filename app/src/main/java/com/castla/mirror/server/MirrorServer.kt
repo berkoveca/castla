@@ -511,15 +511,16 @@ class MirrorServer(private val context: Context) : NanoWSD(DEFAULT_PORT) {
         logHttpFirstContact(session)
         var uri = session.uri
         if (uri == "/") uri = "/index.html"
+        val config = TunnelSecurityConfig.load(context)
         if (uri == "/index.html") {
+            // auth=off means anyone who has the tunnel URL gets the launcher and control.
             MirrorDiagnostics.log(
                 DiagnosticEvent.PAGE_LOAD,
                 "src=${DiagnosticSanitizer.maskIp(session.remoteIpAddress)} " +
+                    "auth=${if (config.authEnabled && config.authPassword.isNotEmpty()) "on" else "OFF"} " +
                     "ua=${DiagnosticSanitizer.safeMessage(session.headers["user-agent"] ?: "<none>")}"
             )
         }
-
-        val config = TunnelSecurityConfig.load(context)
 
         // NanoHTTPD only consumes the POST body for application/x-www-form-urlencoded
         // and multipart content types. Any other body (e.g. text/plain from a

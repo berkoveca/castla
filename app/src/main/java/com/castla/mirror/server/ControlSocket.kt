@@ -158,7 +158,9 @@ class ControlSocket(
                         "client",
                         "quality codec=${json.optString("codec", "-")} avg=${avgDelayMs}ms " +
                             "dropped=$droppedFrames backlog=$backlogDrops " +
-                            "rendered=${json.optInt("rendered", -1)}"
+                            "rendered=${json.optInt("rendered", -1)} " +
+                            "recv=${json.optInt("recvFrames", -1)}f/${json.optInt("recvKeys", -1)}key/${json.optInt("recvKB", -1)}KB " +
+                            "videoSocket=${json.optInt("videoSocket", -9)}"
                     )
                     server.onQualityReport(droppedFrames, avgDelayMs, backlogDrops)
                 }

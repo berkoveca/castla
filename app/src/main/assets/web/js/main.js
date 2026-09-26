@@ -25,6 +25,10 @@ function clientLog(event, detail) {
         }
     } catch (_) {}
 }
+// Video actually RECEIVED by this page (vs. rendered) — tells network loss apart
+// from decoder trouble in the phone's log. Reset each quality report.
+const recvStats = { frames: 0, keys: 0, bytes: 0 };
+let hiddenSince = 0;
 function flushClientLog() {
     while (clientLogQueue.length && controlSocket && controlSocket.readyState === WebSocket.OPEN) {
         try { controlSocket.send(clientLogQueue.shift()); } catch (_) { break; }
@@ -32,7 +36,15 @@ function flushClientLog() {
 }
 window.addEventListener('error', (e) => clientLog('jsError', `${e.message} @${(e.filename || '').split('/').pop()}:${e.lineno}`));
 window.addEventListener('unhandledrejection', (e) => clientLog('unhandledRejection', e.reason && (e.reason.message || e.reason)));
-document.addEventListener('visibilitychange', () => clientLog('visibility', document.visibilityState));
+document.addEventListener('visibilitychange', () => {
+    const hiddenMs = hiddenSince ? Date.now() - hiddenSince : 0;
+    clientLog('visibility', document.visibilityState + (hiddenMs ? ` after ${hiddenMs}ms hidden` : ''));
+    if (document.visibilityState === 'hidden') { hiddenSince = Date.now(); return; }
+    hiddenSince = 0;
+    // A page that sat in the background may hold a zombie video socket / a decoder
+    // the browser reclaimed: after >3 s hidden, start a fresh video connection.
+    if (hiddenMs > 3000 && typeof window.castlaRefreshVideo === 'function') window.castlaRefreshVideo();
+});
 
 // Split strategy: 'dual_stream' = two VDs with separate video streams
 const SPLIT_STRATEGY = 'dual_stream';
@@ -993,6 +1005,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         videoSocket.onmessage = async (event) => {
             if (event.data instanceof ArrayBuffer) {
+                recvStats.frames++;
+                recvStats.bytes += event.data.byteLength;
+                if (event.data.byteLength > 0 && new Uint8Array(event.data, 0, 1)[0] === 0x01) recvStats.keys++;
                 stallKeyframeAsked = false;
                 armFrameWatchdog(videoSocket);
                 if (!decoder) return;
@@ -1019,6 +1034,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         videoSocket.onerror = (error) => { console.error('[Main] Video WebSocket error:', error); clientLog('videoError', 'websocket error'); };
     }
+
+    // Fresh video connection + keyframe after the page returns from the background.
+    window.castlaRefreshVideo = () => {
+        clientLog('videoRefresh', 'page visible again');
+        stallKeyframeAsked = false;
+        connectVideo();
+        setTimeout(() => {
+            try { if (videoSocket && videoSocket.readyState === WebSocket.OPEN) videoSocket.send('requestKeyframe'); } catch (_) {}
+        }, 500);
+    };
 
     function checkReady() {
         if (firstFrameReceived) {
@@ -1284,6 +1309,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                     report.backlogDrops = d.backlogDrops - _prevBacklog;
                     _prevBacklog = d.backlogDrops;
                 }
+                report.recvFrames = recvStats.frames;
+                report.recvKeys = recvStats.keys;
+                report.recvKB = Math.round(recvStats.bytes / 1024);
+                report.videoSocket = videoSocket ? videoSocket.readyState : -1;
+                recvStats.frames = 0; recvStats.keys = 0; recvStats.bytes = 0;
                 try { controlSocket.send(JSON.stringify(report)); } catch (_) {}
             }, 10_000);
         };
