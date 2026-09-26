@@ -3773,9 +3773,12 @@ class MirrorForegroundService : Service() {
                 // app on the car screen is not relaunched. Size change: recreate — an
                 // in-place resize leaves running apps letterboxed at their old size
                 // (small box in a corner of the car screen). See VdRebuildPolicy.
+                val forceRecreate = forceVdRecreate
+                forceVdRecreate = false
                 val vdAction = com.castla.mirror.policy.VdRebuildPolicy.decide(
                     virtualDisplayManager?.hasVirtualDisplay() == true,
-                    currentWidth, currentHeight, width, height
+                    currentWidth, currentHeight, width, height,
+                    forceRecreate = forceRecreate
                 )
                 FileLogger.i(TAG, "VD rebuild: $vdAction ${currentWidth}x$currentHeight -> ${width}x$height@${dpi}dpi")
                 if (vdAction != com.castla.mirror.policy.VdRebuildPolicy.Action.CREATE) {
@@ -3930,6 +3933,7 @@ class MirrorForegroundService : Service() {
         }
         encoder.onError = { err -> handleEncoderError(err) }
         encoder.start { frameData, isKeyFrame ->
+            if (isKeyFrame && channel == "primary") checkForBlankDisplay(frameData.size - 8)
             if (currentCodecMode == CodecModeTransition.MODE_FMP4) {
                 val muxer = getMuxer()
                 if (muxer != null) {
@@ -3941,6 +3945,61 @@ class MirrorForegroundService : Service() {
             }
         }
         mirrorServer?.setKeyframeRequester(channel) { encoder.requestKeyFrame() }
+    }
+
+    /** Set to make the next pipeline rebuild recreate the VD even at the same size. */
+    @Volatile private var forceVdRecreate = false
+    private val blankStreamDetector = com.castla.mirror.policy.BlankStreamDetector()
+    @Volatile private var blankRecoveryJob: Job? = null
+
+    /**
+     * The car showed a black screen that only split screen fixed: the stream kept
+     * running but every keyframe was a solid black picture, for every app launched
+     * on that virtual display. Detect it and do what split screen did — recreate
+     * the display and relaunch the app — after logging what was on the display.
+     */
+    private fun checkForBlankDisplay(keyFrameBytes: Int) {
+        val app = currentVdApp
+        val appShown = app.isNotBlank() && app != "HOME" && !hasActiveSplitSession()
+        if (!blankStreamDetector.onKeyFrame(keyFrameBytes, android.os.SystemClock.elapsedRealtime(), appShown)) return
+        if (blankRecoveryJob?.isActive == true || !browserConnected || isCleanupInProgress) return
+        blankRecoveryJob = serviceScope.launch {
+            val vdId = virtualDisplayManager?.getDisplayId() ?: -1
+            FileLogger.w(TAG, "Black screen detected on VD $vdId (keyframes ${keyFrameBytes}B, app=$app) — recreating the display", durable = true)
+            logBlankDisplayState(vdId)
+            forceVdRecreate = true
+            try {
+                rebuildForCurrentViewport()
+            } catch (t: Throwable) {
+                FileLogger.w(TAG, "Black screen recovery failed: ${t.javaClass.simpleName}: ${t.message}")
+            } finally {
+                forceVdRecreate = false
+                blankStreamDetector.reset()
+            }
+        }
+    }
+
+    /** What was on the black display: its tasks, and where the app's activity really is. */
+    private fun logBlankDisplayState(vdId: Int) {
+        try {
+            val svc = virtualDisplayManager?.getPrivilegedService() ?: return
+            val dumpsys = svc.execCommand("dumpsys activity activities")
+            val tasks = parseDisplayTasks(dumpsys, vdId)
+            FileLogger.i(TAG, "Black VD $vdId tasks: " +
+                if (tasks.isEmpty()) "NONE (display empty)" else tasks.joinToString(" | ") { "${it.mode} ${it.header.take(140)}" })
+            val resumed = dumpsys.lineSequence()
+                .map { it.trim() }
+                .filter { it.startsWith("topResumedActivity") || it.startsWith("ResumedActivity") || it.startsWith("mFocusedApp") }
+                .take(4).toList()
+            if (resumed.isNotEmpty()) FileLogger.i(TAG, "Black VD $vdId resumed: " + resumed.joinToString(" | ") { it.take(160) })
+            val power = svc.execCommand("dumpsys power").lineSequence()
+                .map { it.trim() }
+                .filter { it.startsWith("mWakefulness=") || it.startsWith("Display Power:") || it.startsWith("mIsPowered=") }
+                .take(4).joinToString(" ")
+            if (power.isNotBlank()) FileLogger.i(TAG, "Black VD $vdId power: $power")
+        } catch (t: Throwable) {
+            FileLogger.w(TAG, "Black VD state dump failed: ${t.javaClass.simpleName}")
+        }
     }
 
     private fun handleEncoderError(message: String) {

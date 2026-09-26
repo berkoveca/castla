@@ -26,4 +26,10 @@ class VdRebuildPolicyTest {
     fun `unknown previous size recreates`() {
         assertEquals(Action.RECREATE, VdRebuildPolicy.decide(true, 0, 0, 800, 1024))
     }
+
+    @Test
+    fun `stuck black display is recreated even at the same size`() {
+        assertEquals(Action.RECREATE, VdRebuildPolicy.decide(true, 704, 1360, 704, 1360, forceRecreate = true))
+        assertEquals(Action.CREATE, VdRebuildPolicy.decide(false, 704, 1360, 704, 1360, forceRecreate = true))
+    }
 }

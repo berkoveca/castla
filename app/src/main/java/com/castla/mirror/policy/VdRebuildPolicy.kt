@@ -14,8 +14,13 @@ object VdRebuildPolicy {
 
     enum class Action { CREATE, SWAP_SURFACE, RECREATE }
 
-    fun decide(hasDisplay: Boolean, oldWidth: Int, oldHeight: Int, newWidth: Int, newHeight: Int): Action = when {
+    /** [forceRecreate]: the display itself is broken (e.g. stuck black), a surface swap would keep it. */
+    fun decide(
+        hasDisplay: Boolean, oldWidth: Int, oldHeight: Int, newWidth: Int, newHeight: Int,
+        forceRecreate: Boolean = false
+    ): Action = when {
         !hasDisplay -> Action.CREATE
+        forceRecreate -> Action.RECREATE
         oldWidth == newWidth && oldHeight == newHeight -> Action.SWAP_SURFACE
         else -> Action.RECREATE
     }
